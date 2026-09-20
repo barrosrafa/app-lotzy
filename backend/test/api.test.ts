@@ -31,3 +31,28 @@ describe('API',()=>{it('expõe health e request id',async()=>{const r=await requ
     expect(r.status).toBe(422);
   });
 });
+
+describe('GET /api/history', () => {
+  it('normaliza o arquivo legado e pagina resultados', async () => {
+    const r = await request(app).get('/api/history?limit=2');
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ total: 3782, page: 1, limit: 2, totalPages: 1891 });
+    expect(r.body.data[0]).toMatchObject({ concurso: 3782, data: '2026-09-17' });
+    expect(r.body.data[0].dezenas).toHaveLength(15);
+  });
+
+  it('aplica intervalo de data, concurso e ordenação', async () => {
+    const r = await request(app).get('/api/history?dataInicio=2026-09-15&dataFim=2026-09-17&order=asc');
+    expect(r.status).toBe(200);
+    expect(r.body.data.map((item: { concurso: number }) => item.concurso)).toEqual([3780, 3781, 3782]);
+    const exact = await request(app).get('/api/history?concurso=3781');
+    expect(exact.body.data).toHaveLength(1);
+    expect(exact.body.data[0].data).toBe('2026-09-16');
+  });
+
+  it('rejeita intervalo de datas inválido', async () => {
+    const r = await request(app).get('/api/history?dataInicio=2026-09-18&dataFim=2026-09-01');
+    expect(r.status).toBe(400);
+    expect(r.body.error).toContain('dataInicio');
+  });
+});

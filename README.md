@@ -59,6 +59,7 @@ O projeto não usa atualmente PostgreSQL, MySQL, MongoDB ou outro banco de dados
 - Consulta de um sistema de fechamento pré-computado `W(16,15,15)`.
 - Cálculo informacional de valor esperado e projeção de orçamento.
 - Backtest stateless de uma estratégia contra resultados fornecidos na requisição.
+- Histórico paginado de resultados oficiais em `GET /api/history`, com filtros por data e concurso.
 - Endpoints operacionais `/health`, `/ready`, `/metrics` e OpenAPI em `/api/v1/openapi.json`.
 
 ### Funcionalidades do frontend
@@ -68,12 +69,14 @@ A aplicação Next.js possui as seguintes rotas:
 | Rota | Finalidade |
 |---|---|
 | `/` | Gerar jogos aleatórios e exibir o lote, o custo e o aviso de transparência. |
-| `/filtros` | Consultar o catálogo de filtros disponibilizado pela API. |
+| `/history` | Consultar o histórico paginado de resultados com filtros por data e concurso. |
 | `/validar` | Enviar um jogo para validação e visualizar métricas e avisos. |
-| `/analisar` | Analisar um conjunto de jogos e suas métricas de diversidade. |
-| `/conferir` | Conferir jogos contra as 15 dezenas de um resultado informado. |
-| `/ferramentas` | Usar a projeção informacional de orçamento. |
-| `/carteira` | Área preparada para fluxos de carteira e diversificação. |
+
+As rotas legadas `/filtros`, `/analisar`, `/conferir`, `/ferramentas` e `/carteira` redirecionam permanentemente para `/history`.
+
+### Histórico de resultados
+
+`GET /api/history` lê `db/resultados.json`, normaliza o formato legado do repositório para registros com `concurso`, data ISO e `dezenas`, e retorna `total`, `page`, `limit`, `totalPages` e `data`. Os parâmetros opcionais são `dataInicio`, `dataFim`, `concurso`, `concursoMin`, `concursoMax`, `page`, `limit` e `order`. O limite máximo por página é 500.
 
 ## Arquitetura
 
