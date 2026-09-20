@@ -1,6 +1,6 @@
 # Lotzy — gerador e analisador de jogos da Lotofácil
 
-**Branch documentada:** `feature/v4`
+**Branch documentada:** `feature/v6`
 **Versão declarada nos manifests:** `3.0.0`
 **Idioma da documentação:** português
 **Estado desta documentação:** descreve o código efetivamente presente nesta branch, incluindo limitações conhecidas e riscos pendentes.
@@ -617,7 +617,29 @@ curl -X POST http://localhost:3000/api/v1/games/generate-random \
 
 ## 9. API HTTP completa
 
-A base de negócio é `http://localhost:3000/api/v1`. As respostas de negócio carregam `X-Request-Id`; o cliente pode enviar esse header para correlação. Payload inválido retorna `422` em `application/problem+json`, exceto a rota histórica, que faz validação manual e retorna `400` para query inválida.
+A base de negócio suporta tanto as rotas padronizadas sob `/api` quanto sob `/api/v1`. As respostas de negócio carregam `X-Request-Id`; o cliente pode enviar esse header para correlação. Payload inválido retorna `422` em `application/problem+json`, exceto a rota histórica, que faz validação manual e retorna `400` para query inválida.
+
+### 9.0 Rotas REST Reorganizadas e Workers (Feature v6)
+
+A branch `feature/v6` introduz uma camada otimizada de endpoints desacoplados, processamento assíncrono via `worker_threads` e integração com SWR no frontend:
+
+| Método | Endpoint | Payload / Query | Descrição |
+|---|---|---|---|
+| `GET` | `/api/concursos/latest` | Nenhum | Retorna o último concurso registrado e estatísticas pré-calculadas em cache (`EstatisticaCache`: atrasos, ciclo, frequências e análise do último sorteio). |
+| `POST` | `/api/jogos/desdobrar` | `{ dezenas: number[], regras?: { targetSize?: number, filters?: object, limit?: number }, format?: 'json' \| 'ndjson' }` | Executa expansão combinatória pesada desacoplada do event loop via `desdobrar.worker.ts`. |
+| `POST` | `/api/jogos/simular` | `{ cartoes?: number[][], concursoInicio?: number, concursoFim?: number, historicDraws?: number[][] }` | Cruza cartões com o histórico oficial e calcula ROI, acertos por faixa (11 a 15) e saldo líquido via `simular.worker.ts`. |
+
+#### Arquitetura de `worker_threads` (Fase 2)
+As rotas de CPU pesada (`/api/jogos/desdobrar` e `/api/jogos/simular`) delegam sua execução a instâncias dedicadas de `WorkerPool` gerenciadas pelo Node.js.
+- **Isolamento de CPU**: As rotas apenas despacham a mensagem e aguardam o resultado via `Promise`.
+- **Proteção por Timeout**: Cada tarefa possui limite máximo de tempo de execução configurado (15 a 20 segundos). Caso o limite seja ultrapassado, o worker afetado é substituído e a requisição rejeitada com status HTTP `504` (`TASK_TIMEOUT`).
+- **Cache de Estatísticas (`EstatisticaCache`)**: Centraliza os resultados da base local, mantendo índices pré-calculados em memória para resposta instantânea em `/api/concursos/latest`.
+
+#### Frontend como visualizador com SWR (Fase 3)
+O frontend consome as novas APIs com hooks SWR reativos (`useLatestConcurso`, `useDesdobrar`, `useSimular`):
+- Cálculos residuais de combinação e probabilidades foram eliminados do cliente.
+- Ao clicar em "Gerar Jogos" ou "Desdobrar", apenas um payload JSON é enviado ao servidor.
+- Skeletons e estados de carregamento robustos foram implementados em telas como `/`, `/montar` e `/analisar`.
 
 ### 9.1 Operação
 

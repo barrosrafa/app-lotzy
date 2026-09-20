@@ -15,6 +15,8 @@ import { openapi } from "./infrastructure/http/openapi/openapi.js";
 import { statsRoutes } from "./infrastructure/http/routes/stats.routes.js";
 import { loteRoutes } from "./infrastructure/http/routes/lote.routes.js";
 import { phase2Routes } from "./infrastructure/http/routes/phase2.routes.js";
+import { concursosRoutes } from "./infrastructure/http/routes/concursos.routes.js";
+import { jogosRoutes } from "./infrastructure/http/routes/jogos.routes.js";
 export function createApp() {
   const app = express();
   app.disable("x-powered-by");
@@ -84,6 +86,14 @@ export function createApp() {
   });
   app.use("/api/v1/games/expand", heavy);
   app.use("/api/v1/tools/backtest", heavy);
+  app.use("/api/jogos/desdobrar", heavy);
+  app.use("/api/jogos/simular", heavy);
+  app.use("/api/v1/jogos/desdobrar", heavy);
+  app.use("/api/v1/jogos/simular", heavy);
+  app.use("/api/concursos", standard, concursosRoutes);
+  app.use("/api/v1/concursos", standard, concursosRoutes);
+  app.use("/api/jogos", standard, jogosRoutes);
+  app.use("/api/v1/jogos", standard, jogosRoutes);
   app.use("/api/v1/games", standard, gameRoutes);
   app.use("/api/v1/games", heavy, advancedRoutes);
   app.use("/api/v1/tools", standard, toolRoutes);
