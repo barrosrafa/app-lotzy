@@ -1,287 +1,595 @@
 # Lotzy — gerador e analisador de jogos da Lotofácil
 
+**Branch documentada:** `feature/v4`
+**Versão declarada nos manifests:** `3.0.0`
+**Idioma da documentação:** português
+**Estado desta documentação:** descreve o código efetivamente presente nesta branch, incluindo limitações conhecidas e riscos pendentes.
+
 [![Backend](https://img.shields.io/badge/backend-Node.js%2020%2B-339933?logo=node.js&logoColor=white)](./backend)
 [![API](https://img.shields.io/badge/API-Express%205-000000?logo=express&logoColor=white)](./backend)
 [![Frontend](https://img.shields.io/badge/frontend-Next.js%2015-000000?logo=next.js&logoColor=white)](./frontend)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Testes](https://img.shields.io/badge/testes-Vitest-6E9F18?logo=vitest&logoColor=white)](https://vitest.dev/)
 
-O **Lotzy** é uma aplicação web para geração, validação, análise, desdobramento, conferência e estudo informacional de jogos da Lotofácil. O projeto é organizado como um monorepo simples, com uma API HTTP stateless em Node.js/TypeScript e uma interface web em Next.js/React.
-
-A aplicação foi desenhada para **organizar combinações e apresentar seus custos e limitações com transparência**. Ela não prevê resultados, não identifica dezenas “mais prováveis” e não aumenta a probabilidade de premiação.
-
-> **Jogo responsável:** todas as combinações válidas de 15 dezenas possuem a mesma probabilidade matemática. Filtros, diversificação, score de popularidade e fechamentos alteram a composição dos jogos ou a forma de apresentar o risco; não alteram a probabilidade de cada combinação. Aposte somente o que puder perder e consulte [informações de jogo responsável](https://www.gov.br/saude/pt-br/assuntos/saude-de-a-a-z/j/jogo-patologico).
+> **Aviso de responsabilidade.** O Lotzy organiza combinações, calcula custos e descreve métricas. Ele não prevê sorteios, não identifica dezenas mais prováveis e não aumenta a probabilidade de premiação. Todas as combinações simples válidas de 15 dezenas são equiprováveis. A aplicação deve ser usada apenas para fins informacionais e com limites financeiros definidos.
 
 ## Sumário
 
-- [Visão geral](#visão-geral)
-- [O que existe hoje](#o-que-existe-hoje)
-- [Arquitetura](#arquitetura)
-- [Tecnologias](#tecnologias)
-- [Estrutura do repositório](#estrutura-do-repositório)
-- [Pré-requisitos](#pré-requisitos)
-- [Configuração](#configuração)
-- [Instalação e execução](#instalação-e-execução)
-- [API HTTP](#api-http)
-- [Banco de dados e histórico](#banco-de-dados-e-histórico)
-- [Frontend](#frontend)
-- [Regras matemáticas e de produto](#regras-matemáticas-e-de-produto)
-- [Qualidade, segurança e limites](#qualidade-segurança-e-limites)
-- [Solução de problemas](#solução-de-problemas)
-- [Como contribuir](#como-contribuir)
-- [Licença](#licença)
-- [Contato](#contato)
+- [1. Visão executiva](#1-visão-executiva)
+- [2. Escopo funcional](#2-escopo-funcional)
+- [3. Arquitetura](#3-arquitetura)
+- [4. Diagramas UML](#4-diagramas-uml)
+- [5. Estrutura completa do repositório](#5-estrutura-completa-do-repositório)
+- [6. Tecnologias e dependências](#6-tecnologias-e-dependências)
+- [7. Pré-requisitos e configuração](#7-pré-requisitos-e-configuração)
+- [8. Instalação, execução e build](#8-instalação-execução-e-build)
+- [9. API HTTP completa](#9-api-http-completa)
+- [10. Regras de domínio e algoritmos](#10-regras-de-domínio-e-algoritmos)
+- [11. Frontend: páginas, estado e uso](#11-frontend-páginas-estado-e-uso)
+- [12. Dados históricos](#12-dados-históricos)
+- [13. Testes e validação](#13-testes-e-validação)
+- [14. Gaps, vulnerabilidades e riscos](#14-gaps-vulnerabilidades-e-riscos)
+- [15. Melhorias recomendadas](#15-melhorias-recomendadas)
+- [16. Operação e solução de problemas](#16-operação-e-solução-de-problemas)
+- [17. Contribuição](#17-contribuição)
+- [18. Licença e referências](#18-licença-e-referências)
 
-## Visão geral
+## 1. Visão executiva
 
-O projeto possui três partes principais:
+O Lotzy é um monorepo TypeScript com duas aplicações independentes: uma API Express stateless no diretório `backend/` e uma interface Next.js no diretório `frontend/`. A raiz contém scripts de conveniência, o histórico oficial em JSON fica em `db/resultados.json`, e os documentos de especificação ficam em `plan/`.
 
-1. **Backend:** API Express que gera combinações usando uma fonte criptograficamente segura de aleatoriedade, valida entradas, calcula métricas, aplica filtros, expande combinações e oferece ferramentas informacionais.
-2. **Frontend:** aplicação Next.js com React 19 que consome a API, exibe jogos, permite validação e análise e apresenta uma interface visual baseada em um volante 5×5.
-3. **Dados históricos:** arquivo JSON versionado em `db/resultados.json`, contendo resultados históricos em formato tabular legado. O arquivo é lido em tempo real por `/api/history` e pelos endpoints estatísticos; a API continua stateless para jogos e usuários.
+A API expõe geração aleatória e filtrada, validação, análise de lotes, expansão combinatória, conferência de jogos, fechamentos pré-computados, carteiras diversificadas, estatísticas históricas, cálculo de valor esperado, projeção de orçamento e exportações. O frontend consome a API pelo navegador e mantém alguns estados temporários no `sessionStorage`; ele não possui autenticação nem persistência de usuário no servidor.
 
-O projeto não usa atualmente PostgreSQL, MySQL, MongoDB ou outro banco de dados servidor. Portanto, não há migração, conexão, usuário de banco ou serviço externo obrigatório para executar a versão atual.
+A arquitetura atual não usa banco de dados, fila, cache distribuído, conta de usuário ou serviço externo obrigatório. O histórico é um arquivo JSON local lido em tempo de requisição. Essa escolha simplifica a execução local, mas cria limitações importantes para concorrência, atualização de dados, escala horizontal e governança de produção.
 
-## O que existe hoje
+### O que está implementado
 
-### Funcionalidades da API
-
-- Geração de jogos aleatórios com 15 a 20 dezenas.
-- Geração filtrada com dezenas fixas, dezenas excluídas e limites de composição.
-- Pré-checagem de viabilidade de filtros antes de iniciar tentativas aleatórias.
-- Validação e normalização de um jogo.
-- Análise de jogos individuais e de lotes.
-- Métricas de pares, primos, Fibonacci, moldura, miolo, soma e sequência consecutiva.
-- Score heurístico de padrões potencialmente populares entre apostadores.
-- Análise de diversidade, sobreposição e cobertura de uma carteira.
-- Desdobramento de 16 a 20 dezenas em apostas simples de 15 dezenas.
-- Conferência de jogos contra um resultado informado pelo cliente.
-- Consulta de um sistema de fechamento pré-computado `W(16,15,15)`.
-- Cálculo informacional de valor esperado e projeção de orçamento.
-- Backtest stateless de uma estratégia contra resultados fornecidos na requisição.
-- Histórico paginado de resultados oficiais em `GET /api/history`, com filtros por data e concurso.
-- Endpoints operacionais `/health`, `/ready`, `/metrics` e OpenAPI em `/api/v1/openapi.json`.
-
-### Funcionalidades do frontend
-
-A aplicação Next.js possui as seguintes rotas:
-
-| Rota | Finalidade |
+| Área | Capacidades disponíveis |
 |---|---|
-| `/` | Gerar jogos aleatórios e exibir o lote, o custo e o aviso de transparência. |
-| `/history` | Consultar o histórico paginado de resultados com filtros por data e concurso. |
-| `/validar` | Enviar um jogo para validação e visualizar métricas e avisos. |
+| Geração | Jogos uniformes com 15–20 dezenas, unicidade opcional e CSPRNG por `node:crypto`. |
+| Filtros | Dezenas fixas e excluídas, paridade, primos, Fibonacci, soma, moldura, sequência consecutiva, repetição do concurso anterior, popularidade heurística e sobreposição. |
+| Análise | Soma, pares, primos, Fibonacci, moldura, miolo, maior sequência consecutiva e score de popularidade. |
+| Carteira | Cobertura, sobreposição média/máxima/mínima, Jaccard, Gini e dezenas descobertas. |
+| Combinatória | Expansão de jogos de 16–20 dezenas em combinações de 15; resposta JSON ou NDJSON. |
+| Fechamento | Catálogo efetivo para `W(16,15,15)`, `W(17,15,15)` e `W(18,15,15)` por expansão completa. |
+| Conferência | Conferência de jogos contra 15 dezenas informadas, com faixas de 11 a 15 acertos. |
+| Histórico | Consulta paginada, filtros por data/concurso e exportação CSV, TXT, JSON ou SQL. |
+| Estatísticas | Atrasos, temperatura, ciclos e sazonalidade histórica. |
+| Ferramentas | Valor esperado, orçamento, simulação histórica, variações e tabela de preços. |
+| Operação | `/health`, `/ready`, `/metrics`, `X-Request-Id`, Helmet, CORS, limite de corpo e rate limit. |
 
-As páginas de geração, análise, estatísticas e conferência permanecem client-side e não persistem jogos no backend.
+### O que não está implementado
 
-### Histórico de resultados
+Não há autenticação, autorização, cobrança, registro de apostas, notificações reais, sincronização automática com fonte oficial, banco de dados, observabilidade Prometheus completa, armazenamento de jogos do usuário, painel administrativo ou garantia de que os dados históricos estejam atualizados após o arquivo versionado na branch.
 
-`GET /api/history` lê `db/resultados.json`, normaliza o formato legado do repositório para registros com `concurso`, data ISO e `dezenas`, e retorna `total`, `page`, `limit`, `totalPages` e `data`. Os parâmetros opcionais são `dataInicio`, `dataFim`, `concurso`, `concursoMin`, `concursoMax`, `page`, `limit` e `order`. O limite máximo por página é 500.
+## 2. Escopo funcional
 
-## Arquitetura
+### Fluxo recomendado para uso local
 
-A API segue uma separação em camadas, com o domínio isolado da infraestrutura HTTP:
+1. Inicie a API na porta `3000`.
+2. Inicie o frontend na porta `3001`.
+3. Gere um lote aleatório ou configure filtros.
+4. Valide e analise o lote.
+5. Exporte os jogos ou confira-os contra um resultado informado.
+6. Consulte custos, orçamento e disclaimers antes de qualquer decisão fora da aplicação.
+
+### Princípio matemático
+
+O universo é formado pelas dezenas de `1` a `25`. Uma aposta simples contém `15` dezenas. O número de combinações simples é:
+
+\[
+\binom{25}{15}=3.268.760
+\]
+
+Um jogo com `k` dezenas representa `C(k,15)` apostas simples. A tabela implementada usa preço de `350` centavos por aposta simples e valores fixos informativos de `700`, `1.400` e `3.500` centavos para 11, 12 e 13 acertos. As faixas de 14 e 15 acertos são tratadas como pari-mutuel e dependem do rateio do concurso.
+
+Filtros restringem o espaço amostral. Eles podem alterar a composição e a distribuição do lote, mas não tornam uma combinação individual mais provável. O score de popularidade tenta modelar padrões que podem ser escolhidos por muitas pessoas; ele é heurístico, não foi validado empiricamente contra uma base de apostas reais e não é um modelo do sorteio.
+
+## 3. Arquitetura
+
+### Visão em camadas
 
 ```text
-Cliente HTTP
-    │
-    ▼
-Express 5
-    │  request id, Helmet, CORS, limite de corpo e rate limit
-    ▼
-Rotas + validação Zod
-    │
-    ▼
-Serviços de aplicação/domínio
-    │  geração, filtros, métricas, popularidade, diversidade e combinatória
-    ▼
-Adaptadores
-    │  CSPRNG, tabela de preços e configuração
-    ▼
-Resposta JSON ou application/problem+json
+Navegador / cliente HTTP
+        │
+        ▼
+Next.js + React                 Express 5
+        │                             │
+        │                             ├─ request id
+        │                             ├─ Helmet
+        │                             ├─ CORS
+        │                             ├─ body limit
+        │                             └─ rate limit
+        │                             │
+        └──────────────► API versionada /api/v1
+                                      │
+                                      ├─ Zod: validação de entrada
+                                      ├─ rotas HTTP
+                                      ├─ serviços de domínio
+                                      ├─ adaptador CSPRNG
+                                      ├─ tabela estática de preços
+                                      └─ leitor do histórico JSON
 ```
 
-O gerador não usa `Math.random()`. A implementação usa `crypto.randomInt` por meio de `CryptoRandomSource` e um embaralhamento parcial de Fisher–Yates. Os jogos retornados são ordenados, não possuem dezenas repetidas e respeitam o tamanho solicitado.
+`backend/src/app.ts` compõe o Express e injeta os routers. As regras matemáticas ficam em `domain/games`. Os adaptadores de HTTP, preços, aleatoriedade e dados ficam em `infrastructure`. O tratamento de erros converte erros do Zod e `AppError` para JSON compatível com o padrão Problem Details.
 
-A API não mantém estado de usuário em memória e não persiste jogos gerados. Isso permite executar múltiplas instâncias, desde que o rate limit utilizado em produção seja colocado atrás de um mecanismo compartilhado, como Redis, quando necessário.
+A API não cria estado de usuário. O único estado mutável do processo é o cache de atrasos por uma hora; o histórico é relido do arquivo a cada chamada. Em produção com múltiplas réplicas, o rate limit atual não é compartilhado entre instâncias.
 
-## Tecnologias
+## 4. Diagramas UML
 
-| Camada | Tecnologia | Uso |
-|---|---|---|
-| Backend | Node.js 20 ou superior | Runtime da API. |
-| Backend | TypeScript 5.x com `strict` | Tipagem estática e contratos do domínio. |
-| Backend | Express 5 | Servidor HTTP e roteamento. |
-| Backend | Zod 4 | Validação de payloads e configuração. |
-| Backend | Helmet | Cabeçalhos de segurança. |
-| Backend | CORS | Controle de origens permitidas. |
-| Backend | `express-rate-limit` | Limitação de requisições. |
-| Backend | `pino-http` / `prom-client` | Dependências destinadas a logging e métricas. |
-| Testes | Vitest | Testes unitários e de integração. |
-| Testes | Supertest | Testes HTTP da API. |
-| Frontend | Next.js 15 | Aplicação web e App Router. |
-| Frontend | React 19 | Componentes e interação. |
-| Frontend | TypeScript strict | Tipagem do cliente. |
-| Frontend | Zod 4 | Validação da resposta principal da API. |
-| Dados | JSON versionado | Armazenamento local dos resultados históricos. |
+Os diagramas abaixo usam Mermaid, que pode ser renderizado diretamente por visualizadores compatíveis com Markdown. Eles documentam casos de uso, componentes, classes, sequência, atividade, estados, implantação, pacotes e o modelo lógico dos dados.
 
-## Estrutura do repositório
+### 4.1 Diagrama de casos de uso
+
+```mermaid
+flowchart LR
+  usuario[Usuário] --> gerar((Gerar jogo))
+  usuario --> filtrar((Aplicar filtros))
+  usuario --> validar((Validar jogo))
+  usuario --> analisar((Analisar lote))
+  usuario --> conferir((Conferir resultado))
+  usuario --> historico((Consultar histórico))
+  usuario --> estat((Consultar estatísticas))
+  usuario --> exportar((Exportar dados))
+  gerar --> disclaimer[Receber custo e disclaimer]
+  filtrar --> disclaimer
+  analisar --> disclaimer
+  conferir --> disclaimer
+  administrador[Operador autorizado] --> atualizar((Atualizar arquivo histórico))
+  atualizar --> historico
+```
+
+### 4.2 Diagrama de componentes
+
+```mermaid
+flowchart TB
+  subgraph Browser[Navegador]
+    pages[Next.js App Router]
+    apiClient[frontend/src/lib/api.ts]
+    session[sessionStorage]
+  end
+  subgraph Backend[Backend Node.js]
+    app[Express createApp]
+    routes[Routers HTTP]
+    domain[Serviços de domínio]
+    adapters[Adaptadores: CSPRNG, preços, histórico]
+    errors[Problem Details / errorHandler]
+  end
+  data[(db/resultados.json)]
+  pages --> apiClient
+  pages --> session
+  apiClient --> app
+  app --> routes
+  routes --> domain
+  routes --> adapters
+  routes --> errors
+  adapters --> data
+```
+
+### 4.3 Diagrama de classes do domínio
+
+```mermaid
+classDiagram
+  class RandomSource {
+    <<interface>>
+    +nextInt(min, maxExclusive) number
+  }
+  class CryptoRandomSource {
+    +nextInt(min, maxExclusive) number
+  }
+  class GameGenerator {
+    -source RandomSource
+    +draw(size, universe) Game
+  }
+  class FilterEngine {
+    +check(game, filters) boolean
+    +checkFeasibility(input) Feasibility
+  }
+  class GameAnalyzer {
+    +analyze(game) GameMetrics
+  }
+  class PopularityScorer {
+    +score(game) PopularityAssessment
+  }
+  class DiversityAnalyzer {
+    +analyze(games) DiversityMetrics
+  }
+  class ExpectedValueCalculator {
+    +calculate(games, assumptions) ExpectedValue
+  }
+  RandomSource <|.. CryptoRandomSource
+  GameGenerator --> RandomSource
+  GameAnalyzer --> PopularityScorer
+  FilterEngine ..> GameMetrics
+```
+
+### 4.4 Sequência: geração aleatória
+
+```mermaid
+sequenceDiagram
+  actor U as Usuário
+  participant F as Frontend
+  participant A as Express
+  participant Z as Zod
+  participant G as GameGenerator
+  participant R as CryptoRandomSource
+  participant P as StaticPriceTable
+  U->>F: Define quantidade e tamanho
+  F->>A: POST /api/v1/games/generate-random
+  A->>Z: Valida payload
+  Z-->>A: Payload válido
+  loop até quantity
+    A->>G: draw(numbersPerGame, UNIVERSE)
+    G->>R: nextInt()
+    R-->>G: índice criptográfico
+    G-->>A: jogo ordenado e sem repetição
+  end
+  A->>P: costFor(size)
+  P-->>A: custo em centavos
+  A-->>F: jogos, custo, disclaimer e requestId
+  F-->>U: Exibe volante e exportação
+```
+
+### 4.5 Atividade: geração filtrada
+
+```mermaid
+flowchart TD
+  start([Receber payload]) --> parse{Payload válido?}
+  parse -- não --> e422[422 Problem Details]
+  parse -- sim --> consistency{Fixas e excluídas consistentes?}
+  consistency -- não --> e422
+  consistency -- sim --> feasible[FilterEngine.checkFeasibility]
+  feasible --> possible{Envelope possível?}
+  possible -- não --> infeasible[422 com violations]
+  possible -- sim --> attempt[Sortear candidato]
+  attempt --> checks{Passa filtros e orçamento?}
+  checks -- não --> budget{Tentativas/tempo esgotado?}
+  budget -- não --> attempt
+  budget -- sim --> partial{Existe ao menos um jogo?}
+  checks -- sim --> unique{Jogo novo?}
+  unique -- não --> attempt
+  unique -- sim --> collect[Adicionar ao lote]
+  collect --> done{Quantidade atingida?}
+  done -- não --> attempt
+  done -- sim --> success[200 com lote]
+  partial -- sim --> partialResponse[206 com partial=true]
+  partial -- não --> restrictive[422 FILTERS_TOO_RESTRICTIVE]
+```
+
+### 4.6 Estados de uma requisição de geração filtrada
+
+```mermaid
+stateDiagram-v2
+  [*] --> Recebida
+  Recebida --> Rejeitada: Zod ou consistência inválida
+  Recebida --> VerificandoViabilidade: payload válido
+  VerificandoViabilidade --> Rejeitada: envelope impossível
+  VerificandoViabilidade --> Tentando: envelope possível
+  Tentando --> Tentando: candidato rejeitado
+  Tentando --> Completa: quantidade atingida
+  Tentando --> Parcial: tempo/iterações esgotados e há jogos
+  Tentando --> Rejeitada: orçamento esgotado sem jogos
+  Completa --> [*]
+  Parcial --> [*]
+  Rejeitada --> [*]
+```
+
+### 4.7 Diagrama de implantação
+
+```mermaid
+flowchart LR
+  client[Navegador] -->|HTTP :3001| next[Processo Next.js]
+  next -->|HTTP JSON CORS| api[Processo Node.js :3000]
+  api -->|filesystem read| json[(db/resultados.json)]
+  api -->|stdout| logs[Logs do processo]
+  api -->|HTTP externo opcional| responsible[URL de jogo responsável]
+```
+
+### 4.8 Diagrama de pacotes
+
+```mermaid
+flowchart TB
+  subgraph Domain[domain/games]
+    constants[constants]
+    types[types]
+    ports[ports]
+    services[services]
+  end
+  subgraph Infra[infrastructure]
+    http[http/routes + middleware + openapi]
+    data[data]
+    pricing[pricing]
+    random[random]
+  end
+  subgraph Shared[shared]
+    config[config/env]
+    errors[errors/AppError]
+  end
+  http --> services
+  http --> constants
+  http --> data
+  http --> pricing
+  http --> config
+  http --> errors
+  services --> types
+  services --> constants
+  services --> ports
+  random --> ports
+```
+
+### 4.9 Modelo lógico dos dados históricos
+
+```mermaid
+erDiagram
+  RESULTADO {
+    int concurso PK
+    string data
+    int dezena_01
+    int dezena_02
+    int dezena_03
+    int dezenas_04_a_15
+    boolean acumulado
+  }
+  RESULTADO ||--o{ CONSULTA : "é filtrado por"
+  CONSULTA {
+    int page
+    int limit
+    string dataInicio
+    string dataFim
+    int concurso
+    string order
+  }
+```
+
+O diagrama representa o modelo lógico normalizado exposto pela API. O arquivo físico não é uma tabela relacional: ele usa o objeto `{"Todos os Resultados": [...]}` com uma linha de cabeçalho seguida de arrays legados.
+
+## 5. Estrutura completa do repositório
 
 ```text
 app-lotzy/
+├── .DS_Store                         # artefato de sistema; não deve ser versionado
+├── .env.example                      # variáveis de ambiente de referência
+├── .gitignore                        # exclusões do Git
+├── README.md                         # este documento
+├── package.json                      # scripts do monorepo
 ├── backend/
-│   ├── package.json
-│   ├── tsconfig.json
-│   ├── vitest.config.ts
+│   ├── package.json                  # scripts e dependências da API
+│   ├── package-lock.json             # lockfile npm da API
+│   ├── tsconfig.json                 # TypeScript da API e testes
+│   ├── tsconfig.build.json           # arquivos incluídos no build distribuível
+│   ├── vitest.config.ts              # configuração de testes
 │   ├── src/
-│   │   ├── app.ts                         # composição do Express
-│   │   ├── server.ts                       # inicialização HTTP
+│   │   ├── app.ts                    # composição do Express
+│   │   ├── server.ts                 # processo HTTP e shutdown
 │   │   ├── domain/games/
-│   │   │   ├── constants.ts                # universo e combinatória
-│   │   │   ├── types.ts                    # tipos do domínio
-│   │   │   ├── ports/RandomSource.ts       # porta de aleatoriedade
-│   │   │   └── services/
-│   │   │       ├── GameGenerator.ts
-│   │   │       ├── FilterEngine.ts
-│   │   │       ├── GameAnalyzer.ts
-│   │   │       ├── PopularityScorer.ts
-│   │   │       ├── DiversityAnalyzer.ts
-│   │   │       ├── CombinationExpander.ts
-│   │   │       └── ExpectedValueCalculator.ts
+│   │   │   ├── constants.ts          # universo, conjuntos e combinatória
+│   │   │   ├── types.ts              # contratos do domínio
+│   │   │   ├── ports/RandomSource.ts # porta para aleatoriedade injetável
+│   │   │   └── services/             # regras matemáticas e heurísticas
 │   │   ├── infrastructure/
-│   │   │   ├── http/routes/                # rotas da API
-│   │   │   ├── http/middlewares/            # tratamento de erros
-│   │   │   ├── http/openapi/                # documento OpenAPI
-│   │   │   ├── pricing/                     # preços versionados
-│   │   │   └── random/                      # CSPRNG
+│   │   │   ├── data/results.ts       # leitura/escrita do histórico JSON
+│   │   │   ├── http/routes/           # endpoints HTTP
+│   │   │   ├── http/middlewares/      # tratamento de erros
+│   │   │   ├── http/openapi/          # documento OpenAPI mínimo
+│   │   │   ├── pricing/               # tabela estática de preços
+│   │   │   └── random/                # adaptador CSPRNG
+│   │   ├── scripts/update-results.ts # atualização manual do histórico
 │   │   └── shared/
-│   │       ├── config/env.ts               # configuração validada
-│   │       └── errors/AppError.ts
-│   └── test/
-│       ├── api.test.ts
-│       └── domain.test.ts
+│   │       ├── config/env.ts         # schema de configuração Zod
+│   │       └── errors/AppError.ts     # erros de aplicação tipados
+│   └── test/                         # testes unitários e HTTP
 ├── frontend/
-│   ├── package.json
-│   ├── next.config.ts
-│   ├── tsconfig.json
+│   ├── package.json                  # scripts e dependências Next.js
+│   ├── package-lock.json             # lockfile npm do frontend
+│   ├── next-env.d.ts                 # tipos gerados/referenciados pelo Next
+│   ├── next.config.ts                # configuração Next.js
+│   ├── tsconfig.json                 # TypeScript do frontend
 │   └── src/
-│       ├── app/                            # páginas do App Router
-│       ├── components/PlayslipGrid.tsx     # volante 5×5
-│       └── lib/api.ts                       # cliente HTTP e schemas
-├── db/
-│   └── resultados.json                     # histórico em formato JSON
-├── plan/
-│   ├── SSD-lotofacil-api-2.md              # especificação do backend
-│   └── SSD-lotzy-frontend.md               # especificação do frontend
-├── .env.example
-└── README.md
+│       ├── app/                      # páginas App Router e CSS global
+│       ├── components/               # navegação e volante
+│       └── lib/api.ts                # cliente HTTP, schemas e utilitários
+├── db/resultados.json                # histórico legado versionado
+└── plan/                             # especificações de produto e arquitetura
 ```
 
-## Pré-requisitos
+### Inventário arquivo a arquivo
 
-Para executar o projeto localmente, instale:
+#### Raiz
 
-- **Node.js 20 LTS ou superior**;
-- **npm 10 ou superior**;
-- Git, para clonar o repositório;
-- `curl` ou outra ferramenta HTTP, opcionalmente, para testar a API pelo terminal.
+| Arquivo | Responsabilidade e observações |
+|---|---|
+| `.DS_Store` | Metadado criado pelo macOS. Não participa da execução e deve ser removido do repositório; o `.gitignore` deveria bloqueá-lo. |
+| `.env.example` | Define `NODE_ENV`, porta, CORS, rate limit, URL de jogo responsável e versões de catálogo. Não contém segredo. `LOG_LEVEL` aparece como referência histórica, mas não é lido pelo schema atual. |
+| `.gitignore` | Evita artefatos comuns, dependências, builds e arquivos de ambiente. Deve incluir explicitamente `.DS_Store`, se ainda não incluir. |
+| `package.json` | Expõe `dev`, `dev:frontend`, `build`, `test` e `typecheck`. O script raiz delega à API e, no build, a API delega ao frontend. |
+| `README.md` | Documentação operacional, contratos, diagramas, riscos e recomendações desta branch. |
 
-Não é necessário instalar banco de dados, Docker ou credenciais de serviços externos para o fluxo local atual.
+#### Backend: configuração e processo
 
-## Configuração
+| Arquivo | Responsabilidade e observações |
+|---|---|
+| `backend/package.json` | Declara Node `>=20`, scripts de desenvolvimento, teste, typecheck, lint e build. O script `lint` referencia ESLint, mas ESLint não está declarado nas dependências. |
+| `backend/package-lock.json` | Fixa a árvore de dependências da API. Deve ser regenerado quando dependências forem atualizadas. |
+| `backend/tsconfig.json` | Configuração TypeScript estrita para desenvolvimento e testes. |
+| `backend/tsconfig.build.json` | Configuração do build de produção; exclui testes e gera `dist/`. |
+| `backend/vitest.config.ts` | Configura o Vitest usado pelos quatro arquivos de teste. |
+| `backend/src/server.ts` | Cria o app, escuta na porta configurada e implementa shutdown gracioso para `SIGTERM` e `SIGINT`, com timeout de 10 segundos. |
+| `backend/src/app.ts` | Monta middlewares, request ID, Helmet, CORS, parsing JSON/texto, rotas operacionais, rate limit padrão/pesado e `errorHandler`. A rota de lote aceita `multipart/form-data` no parser textual, mas não implementa parser multipart; isso é um gap de contrato. |
+| `backend/src/shared/config/env.ts` | Valida ambiente com Zod. Converte porta e limites para números, CORS para lista e `API_KEYS` para `Set`. `API_KEYS` é reservado e não protege nenhuma rota atualmente. |
+| `backend/src/shared/errors/AppError.ts` | Define erros de negócio com código, status HTTP e extensões serializáveis. |
+| `backend/src/infrastructure/http/middlewares/errorHandler.ts` | Converte `ZodError` em 422 com `invalidParams`, `AppError` em Problem Details e erros desconhecidos em 500. O erro desconhecido também é enviado ao `console.error`. |
+| `backend/src/infrastructure/http/openapi/openapi.ts` | Publica um OpenAPI 3.1 mínimo com nomes e resumos de rotas. Não contém schemas completos, parâmetros, respostas ou exemplos suficientes para geração confiável de clientes. |
 
-### Backend
+#### Backend: domínio
 
-A configuração é lida pelo arquivo `backend/src/shared/config/env.ts`. Para começar, copie o arquivo de exemplo:
+| Arquivo | Responsabilidade e observações |
+|---|---|
+| `constants.ts` | Define universo 1–25, tamanhos mínimo/máximo, conjuntos de primos, Fibonacci, moldura e funções de combinação. |
+| `types.ts` | Define `Game`, `Range`, filtros, avaliação de popularidade, métricas e violações de viabilidade. |
+| `ports/RandomSource.ts` | Abstrai `nextInt` para permitir teste determinístico e troca do provedor de aleatoriedade. |
+| `GameGenerator.ts` | Faz amostragem sem reposição com embaralhamento parcial e retorna o jogo ordenado. |
+| `FilterEngine.ts` | Confere filtros e calcula envelopes alcançáveis para paridade, primos, Fibonacci, moldura e soma. Não prova todos os filtros combinados; popularidade e sobreposição são tratados por tentativa. |
+| `GameAnalyzer.ts` | Calcula tamanho, soma, paridade, primos, Fibonacci, moldura, miolo, sequência máxima e popularidade. |
+| `PopularityScorer.ts` | Detecta padrões geométricos, aritméticos, calendáricos e composicionais. Combina pesos por grupo com um complemento multiplicativo e rotula a confiança como heurística. |
+| `DiversityAnalyzer.ts` | Calcula cobertura por dezena, overlaps, Jaccard, Gini e dezenas não cobertas. |
+| `CombinationExpander.ts` | Gerador lazy de combinações `C(n,k)`, usado para expansão e fechamento. |
+| `ExpectedValueCalculator.ts` | Calcula probabilidades analíticas e retorno esperado. A parte condicional depende das premissas informadas pelo cliente. |
 
-```bash
-cp .env.example .env
-```
+#### Backend: infraestrutura e rotas
 
-O backend deve ser iniciado a partir da pasta `backend/`, pois o `package.json` e os scripts da API estão nessa pasta.
+| Arquivo | Responsabilidade e observações |
+|---|---|
+| `infrastructure/random/CryptoRandomSource.ts` | Adapta `crypto.randomInt`; não usa `Math.random()`. |
+| `infrastructure/pricing/StaticPriceTable.ts` | Centraliza versão da tabela, preço da aposta simples e prêmios fixos. Valores podem ficar desatualizados frente à operadora oficial. |
+| `infrastructure/data/results.ts` | Localiza o JSON em dois caminhos possíveis, normaliza datas e linhas, lê 15 dezenas e oferece `appendResult` com arquivo temporário e rename. `clearResultsCache` é apenas documentação, pois não há cache de leitura. |
+| `http/routes/api.routes.ts` | Router principal de geração, filtros, validação, análise, expansão, conferência, variações, valor esperado, orçamento e simulação histórica. Também contém schemas e instâncias dos serviços. |
+| `http/routes/advanced.routes.ts` | Implementa fechamento `wheel` e carteira `portfolio`. O catálogo de wheel é efetivamente expansão completa para os tamanhos suportados. |
+| `http/routes/history.routes.ts` | Lista e exporta histórico com filtros, paginação e validação manual de query string. |
+| `http/routes/stats.routes.ts` | Implementa atrasos, temperatura, ciclos e geração orientada ao ciclo. Usa cache de uma hora apenas para atrasos. |
+| `http/routes/phase2.routes.ts` | Implementa sazonalidade, tabela de preços e comparação informativa com Mega-Sena. |
+| `http/routes/lote.routes.ts` | Analisa lote textual linha a linha, com parsing de espaços, vírgulas ou delimitadores equivalentes. |
+| `http/routes/format.ts` | Serializa jogos para CSV, TXT, JSON, NDJSON e SQL e define `Content-Disposition`. |
+| `http/routes/openapi/openapi.ts` | Documento estático do contrato. |
+| `src/scripts/update-results.ts` | Script manual de atualização do arquivo histórico; deve ser executado com cuidado porque modifica um arquivo versionado. |
 
-| Variável | Padrão | Descrição |
+#### Backend: testes
+
+| Arquivo | Cobertura |
+|---|---|
+| `test/domain.test.ts` | Gerador, invariantes, viabilidade, score de popularidade e expansão. |
+| `test/api.test.ts` | Health, request ID, geração, filtros, validação 422, envelope inviável, resposta parcial, sorteio duplicado e histórico. |
+| `test/phase1.test.ts` | Estatísticas, ciclo, simulação, exportação e conferência textual. |
+| `test/phase2.test.ts` | Sazonalidade, tabela de preços, variações, orçamento e wheels W17/W18. |
+
+#### Frontend
+
+| Arquivo | Responsabilidade |
+|---|---|
+| `frontend/package.json` | Scripts `dev`, `build`, `start` e `lint`; usa Next 15, React 19, Zod e TypeScript. |
+| `frontend/package-lock.json` | Lockfile do frontend. |
+| `frontend/next.config.ts` | Configuração atual do Next sem regras customizadas relevantes. |
+| `frontend/tsconfig.json` | TypeScript com alias `@/*` para `src/*`. |
+| `frontend/next-env.d.ts` | Referências de tipos geradas pelo Next. |
+| `frontend/src/app/layout.tsx` | Layout raiz, metadata, idioma `pt-BR`, navegação e aviso de responsabilidade. |
+| `frontend/src/app/globals.css` | Sistema visual, layout responsivo, cartões, botões, volante, tabelas e estados de erro. |
+| `frontend/src/app/page.tsx` | Página inicial de geração aleatória, validação automática e redirecionamento para análise. |
+| `frontend/src/app/aux-pages.tsx` | Componentes client-side compartilhados por ajuda, filtros e análise, incluindo `PageShell`, `FiltersPage`, `AnalyzePage` e `HelpPage`. |
+| `frontend/src/app/montar/page.tsx` | Montagem de jogo filtrado, incluindo fixas, excluídas e soma. |
+| `frontend/src/app/filtros/page.tsx` | Exporta a tela de filtros compartilhada. |
+| `frontend/src/app/analisar/page.tsx` | Exporta a tela de análise compartilhada; lê lote validado do `sessionStorage`. |
+| `frontend/src/app/ajuda/page.tsx` | Exporta a tela de ajuda compartilhada. |
+| `frontend/src/app/conferir/page.tsx` | Confere jogos individuais ou lote textual contra dezenas sorteadas. |
+| `frontend/src/app/estatisticas/page.tsx` | Exibe atrasos, temperatura, ciclos e geração orientada ao ciclo. |
+| `frontend/src/app/history/page.tsx` | Página server wrapper do histórico. |
+| `frontend/src/app/history/HistoryClient.tsx` | Cliente de filtros, paginação e consulta do histórico. |
+| `frontend/src/app/bolao/page.tsx` | Tela de bolão/carteira na interface; conferir o código antes de tratá-la como integração com grupo real. |
+| `frontend/src/app/meus-jogos/page.tsx` | Lista local de jogos salvos no navegador, quando presentes. |
+| `frontend/src/app/imprimir/page.tsx` | Formata jogos do armazenamento local para impressão. |
+| `frontend/src/app/notificacoes/page.tsx` | Tela de notificações locais; não há backend de push ou agendamento. |
+| `frontend/src/components/Navigation.tsx` | Menu principal com links para as áreas da aplicação. |
+| `frontend/src/components/PlayslipGrid.tsx` | Volante 5×5 para exibição/interação de dezenas. |
+| `frontend/src/lib/api.ts` | Cliente `fetch`, schemas Zod de respostas, tipos, parsers de números, helpers de moeda e endpoints. A URL pública é lida de `NEXT_PUBLIC_API_URL`. |
+
+#### Dados e planos
+
+| Arquivo | Responsabilidade |
+|---|---|
+| `db/resultados.json` | Base legada versionada com 3.782 resultados na validação realizada nesta branch; deve ser validada e atualizada antes de uso operacional. |
+| `plan/SSD-lotofacil-api-2.md` | Especificação principal da API, premissas matemáticas, requisitos funcionais e fases. |
+| `plan/SSD-lotzy-frontend.md` | Especificação de experiência e interface do frontend. |
+| `plan/SSD-lotzy-v3.md` | Plano resumido de evolução da versão anterior. |
+
+## 6. Tecnologias e dependências
+
+| Camada | Tecnologia | Uso |
+|---|---|---|
+| Runtime | Node.js `>=20` | Execução da API e scripts. |
+| Backend | TypeScript `5.9` em modo strict | Tipagem e compilação. |
+| Backend | Express `5.1` | HTTP e roteamento. |
+| Backend | Zod `4.1` | Schemas de payload e ambiente. |
+| Backend | Helmet, CORS, express-rate-limit | Cabeçalhos, origens e limitação de requisições. |
+| Backend | pino-http, prom-client | Dependências previstas para logging/métricas; o código atual usa métrica estática e `console`. |
+| Testes | Vitest e Supertest | Testes unitários e HTTP. |
+| Frontend | Next.js `15.5.4`, React `19` | App Router e renderização. |
+| Frontend | Zod | Validação das respostas principais. |
+| Dados | JSON versionado | Histórico local. |
+
+## 7. Pré-requisitos e configuração
+
+### Pré-requisitos
+
+- Node.js 20 ou superior.
+- npm 10 ou superior.
+- Git.
+- `curl` é opcional para chamadas manuais.
+- Não é necessário banco, Docker ou credencial externa para o fluxo local atual.
+
+### Variáveis do backend
+
+Copie `.env.example` para `.env` na raiz. O processo pode ser iniciado da raiz por `npm run dev` ou de `backend/` por `npm run dev`.
+
+| Variável | Padrão | Efeito |
 |---|---:|---|
-| `NODE_ENV` | `development` | Ambiente aceito: `development`, `test` ou `production`. |
+| `NODE_ENV` | `development` | Aceita `development`, `test` ou `production`. |
 | `PORT` | `3000` | Porta HTTP da API. |
-| `CORS_ORIGINS` | vazio | Origens separadas por vírgulas. Em produção, informe explicitamente as origens autorizadas. |
-| `RATE_LIMIT_WINDOW_MS` | `60000` | Duração da janela do rate limit em milissegundos. |
-| `RATE_LIMIT_MAX` | `100` | Limite padrão de requisições por janela. |
-| `RESPONSIBLE_GAMBLING_URL` | URL do gov.br | Link retornado junto às respostas de geração. |
-| `PRICE_TABLE_VERSION` | `2024-11-04` | Versão da tabela de preços em centavos. |
-| `WHEEL_CATALOG_VERSION` | `wheels-2026-09` | Versão do catálogo de fechamentos. |
-| `POPULARITY_MODEL_VERSION` | `popularity-2026-09` | Versão do catálogo heurístico de padrões. |
-| `API_KEYS` | vazio | Conjunto reservado para proteção futura por chave de API. |
+| `CORS_ORIGINS` | vazio | Lista separada por vírgulas. Vazio significa CORS permissivo no código atual. Em produção, configure explicitamente. |
+| `RATE_LIMIT_WINDOW_MS` | `60000` | Janela do rate limit. |
+| `RATE_LIMIT_MAX` | `100` | Limite padrão por IP/janela. Rotas pesadas usam 10. |
+| `RESPONSIBLE_GAMBLING_URL` | URL gov.br | URL retornada nas respostas de geração. |
+| `PRICE_TABLE_VERSION` | `2024-11-04` | Versão declarada da tabela. A constante de preço é estática. |
+| `WHEEL_CATALOG_VERSION` | `wheels-2026-09` | Versão declarada do catálogo. |
+| `POPULARITY_MODEL_VERSION` | `popularity-2026-09` | Versão declarada da heurística. |
+| `API_KEYS` | vazio | Reservado para futura proteção; atualmente não autentica requests. |
+| `LOG_LEVEL` | `info` no exemplo | Não é lido por `env.ts` nem controla logs atualmente. |
 
-O `.env.example` também contém `LOG_LEVEL=info`. Essa variável é mantida como referência de configuração, mas não é utilizada pelo schema atual de `env.ts`.
+### Variável do frontend
 
-> Nunca versione `.env`, tokens, chaves ou credenciais. Em produção, use HTTPS, origens CORS explícitas e um rate limiter compartilhado se houver mais de uma réplica.
-
-### Frontend
-
-O frontend usa `NEXT_PUBLIC_API_URL`. Crie `frontend/.env.local` quando a API não estiver no endereço padrão:
+Crie `frontend/.env.local` somente se a API não estiver no endereço padrão:
 
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:3000/api/v1
 ```
 
-Como a variável começa com `NEXT_PUBLIC_`, ela pode ser incorporada ao bundle do navegador. Ela deve conter somente uma URL pública da API, nunca uma chave secreta.
+Como a variável começa por `NEXT_PUBLIC_`, ela é pública no bundle do navegador. Nunca coloque segredo, token ou chave privada nela.
 
-## Instalação e execução
+## 8. Instalação, execução e build
 
-### 1. Clonar o projeto
+### Clone da branch documentada
 
 ```bash
-git clone https://github.com/barrosrafa/app-lotzy.git
+git clone --branch feature/v4 --single-branch https://github.com/barrosrafa/app-lotzy.git
 cd app-lotzy
 ```
 
-### 2. Instalar e testar o backend
+### Instalação e validação pelo monorepo
 
 ```bash
-cd backend
-npm ci
+npm ci --prefix backend
+npm ci --prefix frontend
 npm run typecheck
 npm test
+npm run build
 ```
 
-### 3. Iniciar a API em desenvolvimento
+O `npm run build` da raiz chama `backend/npm run build`; esse script compila a API e executa `npm --prefix ../frontend run build`.
 
-Em um terminal, dentro de `backend/`:
+### Desenvolvimento
+
+Terminal 1:
 
 ```bash
 npm run dev
 ```
 
-A API ficará disponível em:
-
-```text
-http://localhost:3000
-```
-
-O servidor de desenvolvimento usa `tsx watch` e reinicia quando os arquivos TypeScript são alterados.
-
-### 4. Instalar e iniciar o frontend
-
-Em outro terminal, a partir da raiz do projeto:
+Terminal 2:
 
 ```bash
-cd frontend
-npm ci
-npm run dev
+npm run dev:frontend
 ```
 
-O frontend ficará disponível em:
+A API fica em `http://localhost:3000`. O frontend fica em `http://localhost:3001`.
 
-```text
-http://localhost:3001
-```
-
-O frontend já aponta, por padrão, para `http://localhost:3000/api/v1`. Se a API estiver em outra porta, defina `NEXT_PUBLIC_API_URL` em `frontend/.env.local`.
-
-### 5. Executar versões compiladas
-
-Backend:
+### Execução compilada
 
 ```bash
 cd backend
@@ -289,7 +597,7 @@ npm run build:api
 npm start
 ```
 
-Frontend:
+Em outro terminal:
 
 ```bash
 cd frontend
@@ -297,26 +605,108 @@ npm run build
 npm start
 ```
 
-O comando `npm run build` existente no `backend/package.json` compila a API e executa o build do frontend com `npm --prefix ../frontend run build`. Para execução independente, os comandos acima são mais explícitos.
-
-## API HTTP
-
-### Convenções gerais
-
-A base versionada dos endpoints de negócio é:
-
-```text
-http://localhost:3000/api/v1
-```
-
-As respostas incluem `X-Request-Id`. O cliente pode enviar esse cabeçalho para facilitar correlação de logs:
+### Exemplo de smoke test
 
 ```bash
-curl http://localhost:3000/health \
-  -H 'X-Request-Id: exemplo-local-001'
+curl -i http://localhost:3000/health
+curl -s http://localhost:3000/api/v1/openapi.json | head
+curl -X POST http://localhost:3000/api/v1/games/generate-random \
+  -H 'Content-Type: application/json' \
+  -d '{"quantity":2,"numbersPerGame":15}'
 ```
 
-Payloads JSON inválidos semanticamente retornam `422` com `Content-Type: application/problem+json`. Um exemplo de erro:
+## 9. API HTTP completa
+
+A base de negócio é `http://localhost:3000/api/v1`. As respostas de negócio carregam `X-Request-Id`; o cliente pode enviar esse header para correlação. Payload inválido retorna `422` em `application/problem+json`, exceto a rota histórica, que faz validação manual e retorna `400` para query inválida.
+
+### 9.1 Operação
+
+| Método | Endpoint | Comportamento |
+|---|---|---|
+| `GET` | `/health` | Retorna `{status:"ok"}`; liveness. |
+| `GET` | `/ready` | Retorna checks estáticos de tabela e catálogo. Não verifica arquivo histórico, rede ou dependências externas. |
+| `GET` | `/metrics` | Retorna apenas a métrica estática `lotzy_up 1`; não é um exporter completo. |
+| `GET` | `/api/v1/openapi.json` | Retorna documento OpenAPI 3.1 mínimo. |
+
+### 9.2 Geração e análise
+
+| Método | Endpoint | Payload principal | Resposta |
+|---|---|---|---|
+| `POST` | `/games/generate-random` | `quantity` 1–500, `numbersPerGame` 15–20, `unique` | Jogos, custo, expected value parcial, disclaimer. Query `format`: `csv`, `txt`, `json`, `ndjson`, `sql`. |
+| `POST` | `/games/generate-filtered` | Quantidade 1–100, fixas, excluídas, filtros e budget | `200`, ou `206` se parcial; `422` se inviável ou sem resultado. |
+| `GET` | `/games/filters` | Nenhum | Catálogo resumido de filtros e domínios. |
+| `GET` | `/games/patterns` | Nenhum | Padrões heurísticos, pesos e versão do modelo. |
+| `POST` | `/games/validate` | `{game:number[]}` com 15–20 dezenas únicas | Jogo normalizado, custo, métricas e warnings. |
+| `POST` | `/games/analyze` | `{games, page, pageSize}` | Métricas por página, agregados e diversidade. |
+| `POST` | `/games/generate/variations` | `{game, count}` | Variações com sobreposição mínima implícita. |
+
+#### Exemplo de geração filtrada
+
+```bash
+curl -X POST http://localhost:3000/api/v1/games/generate-filtered \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "quantity": 5,
+    "numbersPerGame": 15,
+    "fixedNumbers": [1, 2],
+    "excludedNumbers": [24, 25],
+    "filters": {
+      "evens": {"min": 6, "max": 8},
+      "sum": {"min": 170, "max": 220},
+      "maxConsecutiveRun": 5,
+      "maxPopularityScore": 0.7
+    },
+    "budget": {"maxAttemptsPerGame": 5000, "maxTotalMs": 1000}
+  }'
+```
+
+`FilterEngine.checkFeasibility` calcula envelopes simples antes da amostragem. Ele não resolve uma otimização global de todos os filtros. Por isso, um filtro pode ser matematicamente possível e ainda terminar em `206` ou `422` quando o orçamento de tentativas/tempo for insuficiente.
+
+### 9.3 Expansão, conferência e exportação
+
+| Método | Endpoint | Detalhes |
+|---|---|---|
+| `POST` | `/games/expand` | Aceita 16–20 dezenas. JSON é recusado acima de 1.000 combinações; NDJSON é recomendado. Rate limit pesado. |
+| `POST` | `/games/check` | Recebe `drawnNumbers` com 15 únicas e até 500 jogos. Informa hits e faixas. |
+| `POST` | `/games/check/lote` | Recebe texto e `drawnNumbers` na query. Aceita linhas textuais; limite de corpo 2 MB. |
+| `GET / POST` | Rotas de geração com `?format=` | Exportam CSV, TXT, JSON, NDJSON ou SQL conforme a rota. |
+| `GET` | `/api/history?...&format=` | Exporta histórico em CSV, TXT, JSON ou SQL. |
+
+No SQL exportado, os valores são interpolados como texto. O endpoint não executa o SQL, mas consumidores devem tratar o arquivo como saída gerada e revisar nomes de tabela, esquema e encoding antes de importar.
+
+### 9.4 Carteira e fechamento
+
+| Método | Endpoint | Detalhes |
+|---|---|---|
+| `POST` | `/games/portfolio` | Gera até 200 jogos com limites de overlap e popularidade. O orçamento é por iterações e milissegundos. Pode retornar `206`. |
+| `POST` | `/games/wheel` | Aceita 16–22 dezenas, mas só atende garantias `W(16,15,15)`, `W(17,15,15)` e `W(18,15,15)`. A implementação expande todas as combinações. |
+
+A garantia do wheel é condicional: se as 15 dezenas sorteadas estiverem dentro das dezenas escolhidas, um bilhete terá os acertos declarados. Ela não aumenta a probabilidade de o sorteio cair no conjunto escolhido.
+
+### 9.5 Ferramentas informacionais
+
+| Método | Endpoint | Detalhes |
+|---|---|---|
+| `POST` | `/tools/expected-value` | Retorno esperado analítico para faixas fixas e, opcionalmente, premissas de rateio. |
+| `POST` | `/tools/bankroll-check` | Projeta quantidade de apostas, gasto e perda esperada para orçamento e horizonte. |
+| `POST` | `/tools/simulate-historical` | Conta acertos de uma combinação em resultados históricos fornecidos pelo arquivo. Não é previsão. |
+| `GET` | `/api/v1/tabela-precos` | Retorna versão, preço e prêmios fixos informativos. |
+| `GET` | `/api/v1/comparison` | Comparativo informativo com Mega-Sena; não gera jogos para ela. |
+
+### 9.6 Histórico e estatísticas
+
+| Método | Endpoint | Query/payload |
+|---|---|---|
+| `GET` | `/api/history` | `dataInicio`, `dataFim`, `concurso`, `concursoMin`, `concursoMax`, `page`, `limit`, `order`, `format`. Limite efetivo 500. |
+| `GET` | `/api/v1/stats/atrasos` | Sem parâmetros; cache público de uma hora. |
+| `GET` | `/api/v1/stats/temperatura` | `janela` 10, 20 ou 50. |
+| `GET` | `/api/v1/stats/ciclos` | Ciclos sequenciais que cobrem as 25 dezenas. |
+| `POST` | `/api/v1/games/generate/ciclo` | `quantity` 1–100 e `numbersPerGame` 15–20. Inclui dezenas faltantes do ciclo atual. |
+| `GET` | `/api/v1/stats/seasonal` | `month` de 1 a 12. |
+
+### 9.7 Erros
+
+Exemplo de erro de validação:
 
 ```json
 {
@@ -327,550 +717,243 @@ Payloads JSON inválidos semanticamente retornam `422` com `Content-Type: applic
   "instance": "/api/v1/games/generate-random",
   "requestId": "exemplo-local-001",
   "invalidParams": [
-    {
-      "name": "quantity",
-      "reason": "Too small: expected number to be >=1"
-    }
+    {"name": "quantity", "reason": "Too small: expected number to be >=1"}
   ]
 }
 ```
 
-### Endpoints operacionais
+Códigos de aplicação relevantes incluem `VALIDATION_FAILED`, `FILTERS_TOO_RESTRICTIVE`, `WHEEL_NOT_AVAILABLE` e `UNSUPPORTED_RESPONSE_SIZE`.
 
-| Método | Rota | Descrição |
-|---|---|---|
-| `GET` | `/health` | Verifica se o processo está vivo. Retorna `{ "status": "ok" }`. |
-| `GET` | `/ready` | Verifica dependências estáticas, como tabela de preços e catálogo de wheels. |
-| `GET` | `/metrics` | Expõe uma métrica Prometheus mínima em texto. |
-| `GET` | `/api/v1/openapi.json` | Publica o contrato OpenAPI 3.1 gerado pela aplicação. |
+## 10. Regras de domínio e algoritmos
 
 ### Geração aleatória
 
-#### `POST /api/v1/games/generate-random`
+`GameGenerator` usa amostragem sem reposição sobre `UNIVERSE`. `CryptoRandomSource` delega a `crypto.randomInt`, o que evita o uso de `Math.random()`. A API ordena cada jogo antes de retorná-lo. A unicidade de jogos é controlada por uma chave textual com dezenas separadas por hífen.
 
-Gera de 1 a 500 jogos com 15 a 20 dezenas. O campo `unique` evita jogos duplicados dentro do lote.
+### Filtros
 
-```bash
-curl -X POST http://localhost:3000/api/v1/games/generate-random \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "quantity": 2,
-    "numbersPerGame": 15,
-    "unique": true
-  }'
-```
+- **Pares:** conta dezenas divisíveis por 2.
+- **Primos:** usa o conjunto fixo definido em `constants.ts`.
+- **Fibonacci:** usa o subconjunto definido no domínio; é uma classificação de composição, não uma propriedade causal do sorteio.
+- **Soma:** compara a soma total com intervalo inclusivo.
+- **Moldura e miolo:** usam o volante 5×5.
+- **Sequência:** mede a maior corrida de inteiros consecutivos após ordenar.
+- **Repetição:** conta interseção com `previousDraw`.
+- **Popularidade:** aplica pesos heurísticos por grupo e limita o score ao intervalo 0–1.
+- **Sobreposição:** rejeita um candidato se ele exceder o overlap máximo com jogos aceitos anteriormente.
 
-Exemplo de resposta resumida:
+### Expansão combinatória
 
-```json
-{
-  "status": "success",
-  "meta": {
-    "requestId": "...",
-    "generatedQuantity": 2,
-    "numbersPerGame": 15,
-    "priceTableVersion": "2024-11-04"
-  },
-  "data": [
-    { "game": [1, 3, 4, 5, 7, 8, 10, 12, 14, 16, 18, 19, 21, 23, 25] }
-  ],
-  "cost": {
-    "simpleBets": 1,
-    "totalCents": 350,
-    "formatted": "R$ 3,50"
-  },
-  "expectedValue": {
-    "fixedTiersCents": 90,
-    "note": "Parcela determinística. Faixas 14 e 15 requerem premissas."
-  },
-  "disclaimer": "Nenhuma combinação tem probabilidade superior a outra...",
-  "responsibleGamblingUrl": "https://www.gov.br/..."
-}
-```
+`expand(pool, 15)` gera todas as combinações de 15 sem materializar o gerador antes da rota decidir o formato. O número de jogos cresce rapidamente: `C(16,15)=16`, `C(17,15)=136`, `C(18,15)=816`, `C(19,15)=3.876` e `C(20,15)=15.504`. A rota NDJSON escreve em fatias, mas ainda cria o array `combos` completo antes de transmitir; isso limita o benefício de streaming para entradas maiores.
 
-> **Atenção ao contrato atual:** `cost` representa o custo de um jogo de determinado tamanho, mesmo quando o lote contém vários jogos. O frontend atual multiplica `totalCents` e `simpleBets` por `meta.generatedQuantity` apenas para a apresentação do lote. Essa compensação é temporária e deve ser removida quando o contrato da API passar a retornar o custo total do lote.
+### Diversidade
 
-#### `POST /api/v1/games/generate-filtered`
+A carteira calcula o overlap de cada par, o índice de Jaccard, a frequência de cada dezena e o coeficiente de Gini da cobertura. Esses números descrevem concentração e dispersão. Eles não mudam o valor esperado de cada aposta.
 
-Gera de 1 a 100 jogos respeitando restrições. Antes de tentar gerar, a API verifica se os filtros são matematicamente viáveis.
+### Valor esperado
 
-```json
-{
-  "quantity": 3,
-  "numbersPerGame": 15,
-  "fixedNumbers": [2, 10],
-  "excludedNumbers": [1, 25],
-  "filters": {
-    "evens": { "min": 6, "max": 8 },
-    "primes": { "min": 4, "max": 6 },
-    "sum": { "min": 170, "max": 220 },
-    "maxConsecutiveRun": 5,
-    "maxPopularityScore": 0.3,
-    "maxOverlapWithBatch": 11,
-    "repeatsFromPrevious": {
-      "previousDraw": [2, 3, 5, 8, 9, 11, 13, 14, 16, 18, 19, 21, 22, 24, 25],
-      "min": 8,
-      "max": 10
-    }
-  },
-  "budget": {
-    "maxAttemptsPerGame": 5000,
-    "maxTotalMs": 1000
-  }
-}
-```
+O cálculo separa prêmios fixos de 11–13 acertos e prêmios condicionais de 14–15. O cliente deve fornecer `jackpotCents`, `expectedWinners15`, `expectedWinners14` e `prize14Cents` para a parte condicional. Sem essas premissas, o retorno condicional é zero no cálculo.
 
-Os filtros aceitos são `evens`, `primes`, `fibonacci`, `sum`, `frame`, `maxConsecutiveRun`, `maxPopularityScore`, `maxOverlapWithBatch` e `repeatsFromPrevious`. Cada intervalo pode receber `min`, `max` ou ambos.
+## 11. Frontend: páginas, estado e uso
 
-- `200`: quantidade solicitada foi gerada.
-- `206`: houve geração parcial dentro do orçamento de tentativas ou tempo.
-- `422`: filtros inviáveis ou orçamento esgotado sem gerar nenhum jogo.
-
-### Catálogos e validação
-
-| Método | Rota | Corpo ou retorno |
+| URL | Página | Dados e comportamento |
 |---|---|---|
-| `GET` | `/api/v1/games/filters` | Catálogo de filtros, domínio, expectativa, cobertura a priori e natureza do filtro. |
-| `GET` | `/api/v1/games/patterns` | Catálogo do score heurístico, seus pesos, versão e ganho estimado de ordem de grandeza. |
-| `POST` | `/api/v1/games/validate` | `{ "game": [1, 2, ..., 15] }`; normaliza, calcula métricas, custo e avisos. |
-| `POST` | `/api/v1/games/analyze` | `{ "games": [[...]], "page": 1, "pageSize": 100 }`; retorna métricas agregadas e diversidade. |
+| `/` | Gerar | Chama `generateRandom`, valida o lote com `validateAndAnalyzeBatch`, salva no `sessionStorage` e navega para `/analisar`. |
+| `/montar` | Montar | Chama `generateFiltered` e `validateGame` para composição controlada. |
+| `/filtros` | Filtros | Formulário compartilhado para opções de composição. |
+| `/analisar` | Analisar | Lê `lotzy:validated-games` do `sessionStorage`, mostra soma média, desvio, popularidade e exportação local/API. |
+| `/conferir` | Conferir | Usa `checkGames` e `checkGamesBatch`. |
+| `/estatisticas` | Estatísticas | Usa atrasos, temperatura, ciclos e geração por ciclo. |
+| `/history` | Histórico | Consulta API com filtros, paginação e ordenação. |
+| `/bolao` | Bolão | Interface de carteira/bolão local; não há backend de participantes ou divisão financeira. |
+| `/meus-jogos` | Meus jogos | Usa armazenamento local do navegador. |
+| `/imprimir` | Imprimir | Prepara visualização de impressão a partir dos jogos locais. |
+| `/notificacoes` | Notificações | Preferências locais; não envia push. |
+| `/ajuda` | Ajuda | Explica o fluxo e a responsabilidade do usuário. |
 
-Exemplo de validação:
+O frontend usa App Router e páginas estáticas com componentes client-side onde há estado. `api.ts` valida a resposta principal de geração e histórico com Zod, mas várias funções retornam `unknown`; isso reduz a segurança de tipos nas telas avançadas. A URL da API é definida no build do frontend, não em runtime no navegador.
 
-```bash
-curl -X POST http://localhost:3000/api/v1/games/validate \
-  -H 'Content-Type: application/json' \
-  -d '{"game":[15,1,2,3,4,5,6,7,8,9,10,11,12,13,14]}'
-```
+## 12. Dados históricos
 
-A resposta informa `normalizedGame`, `equivalentSimpleBets`, `cost`, `metrics` e `warnings`. Avisos como soma fora da faixa típica ou score de popularidade alto são informacionais; não significam que o jogo seja inválido.
-
-### Desdobramento e conferência
-
-#### `POST /api/v1/games/expand`
-
-Expande de 16 a 20 dezenas em todas as combinações de 15 dezenas.
+`db/resultados.json` usa o formato legado:
 
 ```json
 {
-  "numbers": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-  "format": "ndjson"
-}
-```
-
-O número de apostas é `C(n, 15)`. Para 20 dezenas, o resultado chega a 15.504 combinações. Use `format: "ndjson"` para expansões grandes. JSON único acima de 1.000 combinações retorna `406 UNSUPPORTED_RESPONSE_SIZE`.
-
-#### `POST /api/v1/games/check`
-
-Confere de 1 a 500 jogos contra um resultado informado pelo cliente.
-
-```json
-{
-  "drawnNumbers": [2, 3, 5, 8, 9, 11, 13, 14, 16, 18, 19, 21, 22, 24, 25],
-  "games": [
-    [1, 2, 3, 5, 8, 9, 11, 13, 14, 16, 19, 21, 22, 24, 25]
+  "Todos os Resultados": [
+    ["concurso", "data", "dezena 1", "...", "dezena 15"],
+    [3782, "17/09/2026", 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
   ]
 }
 ```
 
-A resposta classifica cada jogo em `ELEVEN`, `TWELVE`, `THIRTEEN`, `FOURTEEN`, `FIFTEEN` ou `NONE`. Os prêmios de 11, 12 e 13 acertos são tratados como valores fixos da tabela configurada. As faixas de 14 e 15 acertos são pari-mutuel e não recebem valor inventado pela API.
+`loadResults()` descarta linhas inválidas, normaliza datas para `YYYY-MM-DD`, ordena dezenas e força exatamente 15 números. A rota histórica aplica filtros e paginação após carregar o arquivo inteiro. `appendResult()` evita duplicar concurso, ordena as linhas e grava em arquivo temporário antes de renomear.
 
-### Carteira e fechamento
+O script `backend/src/scripts/update-results.ts` é manual. Antes de executar, faça backup, valide origem e destino e confira o diff do JSON. Não existe autenticação ou endpoint HTTP para atualização, o que reduz a superfície pública, mas não substitui controle de acesso no host.
 
-#### `POST /api/v1/games/portfolio`
+## 13. Testes e validação
 
-Gera até 200 jogos buscando respeitar `maxOverlap` e `maxPopularityScore`, com limites explícitos de iterações e tempo.
-
-```json
-{
-  "quantity": 10,
-  "numbersPerGame": 15,
-  "constraints": {
-    "maxOverlap": 11,
-    "maxPopularityScore": 0.5
-  },
-  "budget": {
-    "maxIterations": 50000,
-    "maxTotalMs": 500
-  }
-}
-```
-
-Retorna `200` quando a meta é atingida e `206` quando entrega uma carteira parcial ou não alcança integralmente a restrição de sobreposição.
-
-#### `POST /api/v1/games/wheel`
-
-Consulta o catálogo de fechamento pré-computado. A implementação atual disponibiliza somente `W(16,15,15)`:
-
-```json
-{
-  "numbers": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-  "guarantee": {
-    "ifDrawn": 15,
-    "atLeast": 15
-  }
-}
-```
-
-O sistema retorna 16 bilhetes, custo, limite inferior de Schönheim, versão do catálogo e a garantia condicional. A garantia somente se aplica quando todas as 15 dezenas sorteadas estão entre as 16 escolhidas; ela não aumenta a probabilidade de esse evento ocorrer.
-
-### Ferramentas informacionais
-
-| Método | Rota | Entrada principal | Finalidade |
-|---|---|---|---|
-| `POST` | `/api/v1/tools/expected-value` | `games` e, opcionalmente, premissas de rateio | Separa a parcela determinística da parcela condicional do valor esperado. |
-| `POST` | `/api/v1/tools/bankroll-check` | `monthlyBudgetCents`, `betCostCents`, `horizonMonths` | Projeta gasto, retorno esperado e perda esperada. Não é recomendação financeira. |
-| `POST` | `/api/v1/tools/backtest` | `historicDraws` e, opcionalmente, `strategy.games` | Compara acertos observados com uma linha de base e informa o poder estatístico da amostra. |
-
-Exemplo de projeção de orçamento:
-
-```bash
-curl -X POST http://localhost:3000/api/v1/tools/bankroll-check \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "monthlyBudgetCents": 3500,
-    "betCostCents": 350,
-    "horizonMonths": 3
-  }'
-```
-
-O backtest sempre inclui `statisticalPower`. Pequenos históricos não são evidência suficiente para afirmar que uma estratégia altera a probabilidade de faixas raras.
-
-## Banco de dados e histórico
-
-### Arquivo disponível
-
-`db/resultados.json` contém uma chave `Todos os Resultados`. O primeiro elemento é o cabeçalho e os demais são linhas com:
-
-| Posição | Campo | Exemplo |
-|---:|---|---|
-| 0 | Concurso | `1` |
-| 1 | Data | `29/09/2003` |
-| 2 a 16 | D. 1 a D. 15 | Dezenas sorteadas de 1 a 25 |
-
-No estado atual do repositório, o arquivo contém **3.782 concursos**, do concurso 1 ao concurso 3782, com datas que vão de 29/09/2003 a 17/09/2026 conforme o conteúdo versionado no arquivo.
-
-### Leitura local
-
-O JSON pode ser lido com Node.js:
-
-```bash
-node - <<'NODE'
-const fs = require('node:fs');
-const json = JSON.parse(fs.readFileSync('db/resultados.json', 'utf8'));
-const rows = json['Todos os Resultados'];
-const [header, ...draws] = rows;
-console.log({ header, totalConcursos: draws.length, primeiro: draws[0], ultimo: draws.at(-1) });
-NODE
-```
-
-### Limites atuais do histórico
-
-O arquivo funciona como um artefato local versionado. Ele não é um banco de dados relacional, não possui migrações e não é consultado pelas rotas atuais. A API recebe `drawnNumbers` e `historicDraws` diretamente no corpo das requisições. Também não há integração implementada com a API oficial da Caixa nem um job de sincronização automática.
-
-Se o projeto passar a persistir ou atualizar o histórico em produção, a implementação deverá definir previamente:
-
-- fonte oficial e política de atualização;
-- normalização de datas e dezenas;
-- chave única por concurso;
-- validação de concursos incompletos ou corrigidos;
-- estratégia de cache e paginação;
-- trilha de auditoria da origem dos dados.
-
-## Frontend
-
-O frontend é uma aplicação Next.js 15 com App Router, React 19 e TypeScript strict. O cliente HTTP fica em `frontend/src/lib/api.ts` e usa `fetch` para acessar a API.
-
-O frontend:
-
-- valida a resposta principal de geração com Zod;
-- preserva o `X-Request-Id` na mensagem de erro;
-- mostra respostas `206` como resultados parciais;
-- mantém dinheiro em centavos até a formatação com `Intl.NumberFormat`;
-- exibe o disclaimer recebido pela API;
-- usa um volante 5×5 com estados visuais e textuais;
-- não deve transformar `popularityScore` em previsão de sorteio;
-- não deve embutir segredos no bundle do navegador.
-
-A URL da API pode ser alterada sem recompilar o código-fonte:
-
-```env
-# frontend/.env.local
-NEXT_PUBLIC_API_URL=http://localhost:3000/api/v1
-```
-
-Para verificar a integração manualmente:
-
-```bash
-curl -s http://localhost:3000/health
-curl -s http://localhost:3000/api/v1/games/filters
-curl -s -X POST http://localhost:3000/api/v1/games/generate-random \
-  -H 'Content-Type: application/json' \
-  -d '{"quantity":5,"numbersPerGame":15}'
-```
-
-## Regras matemáticas e de produto
-
-O universo de uma aposta da Lotofácil é formado por 25 dezenas. Uma aposta simples escolhe 15 dezenas. Quando o jogo contém mais dezenas, o número de apostas simples equivalentes é:
+A validação executada nesta atualização foi:
 
 ```text
-apostas simples = C(números escolhidos, 15)
+backend: npm run typecheck  → aprovado
+backend: npm test           → 4 arquivos, 27 testes aprovados
+backend: npm run build:api  → aprovado
+frontend: npm run build     → aprovado; 15 rotas geradas
 ```
 
-| Dezenas escolhidas | Apostas simples equivalentes |
-|---:|---:|
-| 15 | 1 |
-| 16 | 16 |
-| 17 | 136 |
-| 18 | 816 |
-| 19 | 3.876 |
-| 20 | 15.504 |
+O teste de frontend não possui suíte automatizada de componentes, acessibilidade ou integração de navegador. O backend cobre invariantes importantes, mas ainda há lacunas em exportações, limites de tamanho, concorrência, rate limit, CORS, autenticação futura e falhas do sistema de arquivos.
 
-O código mantém os valores monetários em centavos. A tabela de preço é versionada em `backend/src/infrastructure/pricing/StaticPriceTable.ts` e a API calcula o custo com base no tamanho do jogo.
-
-### Interpretação do score de popularidade
-
-`popularityScore` é uma heurística que representa padrões visuais ou culturais que podem ser escolhidos por muitas pessoas, como sequências, linhas, colunas, diagonais, múltiplos de cinco, espelhamentos e datas. O score:
-
-- não modela o mecanismo do sorteio;
-- não é uma previsão;
-- não altera a probabilidade de acerto;
-- pode ser usado apenas como uma hipótese de redução de rateio nas faixas pari-mutuel;
-- deve ser apresentado junto de sua natureza `heuristic` e de uma magnitude estimada, não como promessa de ganho.
-
-### Transparência sobre filtros
-
-Filtros como pares, primos, soma e Fibonacci descrevem subconjuntos do universo. A cobertura a priori de um filtro não é uma descoberta de padrão histórico e não constitui recomendação de aposta. O frontend deve usar o catálogo devolvido por `GET /games/filters`, em vez de inventar rótulos como “faixa ideal”.
-
-## Qualidade, segurança e limites
-
-### Testes disponíveis
-
-No backend:
+Para repetir:
 
 ```bash
-npm run typecheck
-npm test
+cd backend && npm ci && npm run typecheck && npm test && npm run build:api
+cd ../frontend && npm ci && npm run build
 ```
 
-A suíte cobre, entre outros pontos:
+## 14. Gaps, vulnerabilidades e riscos
 
-- geração de 15 a 20 dezenas;
-- unicidade e ordenação;
-- pré-checagem de inviabilidade de filtros;
-- caso em que não há dezenas livres após as fixas;
-- score limitado ao intervalo esperado e confiança heurística;
-- expansão combinatória;
-- endpoint `/health`;
-- propagação de `X-Request-Id`;
-- geração de jogos;
-- catálogo de filtros;
-- erros de validação em formato Problem Details.
+### 14.1 Vulnerabilidades de dependências
 
-### Controles implementados
+A auditoria realizada durante esta atualização, com `npm audit` após `npm ci`, reportou:
 
-- corpo JSON limitado a 256 kB;
-- Helmet habilitado;
-- `x-powered-by` desabilitado;
-- CORS configurável;
-- rate limit padrão de 100 requisições por janela;
-- rate limit pesado de 10 requisições por janela em expansão, backtest e carteira;
-- validação de payloads com Zod;
-- resposta de erros estruturada em `application/problem+json`;
-- identificador de requisição em todas as respostas;
-- uso de `crypto.randomInt` para geração;
-- valores monetários representados em centavos.
+| Pacote/área | Resultado observado | Impacto e ação |
+|---|---:|---|
+| Backend | 2 vulnerabilidades moderadas | Investigar a árvore transitiva, atualizar lockfile e revisar changelogs antes de produção. |
+| Frontend / Next.js | 1 crítica e 2 altas | A versão instalada era `next@15.5.4`; atualizar para a versão corrigida indicada pelo audit, testar build e revisar advisories de Server Components, cache, SSR e Image Optimization. |
+| Frontend / PostCSS e sharp | Incluídos na cadeia do Next | Atualizar via Next e lockfile; não usar `npm audit fix --force` sem revisar possíveis mudanças de major. |
+| prom-client | Aviso de pacote depreciado | Avaliar migração para `@prometheus-io/client` ou remover a dependência até que métricas reais sejam implementadas. |
 
-### Recomendações para produção
+A saída do audit é um retrato do momento da instalação. Rode novamente no CI e trate vulnerabilidades críticas/altas como bloqueadoras para deploy público. Não foi aplicado `npm audit fix --force` automaticamente porque isso pode alterar majors sem teste de regressão.
 
-Antes de publicar a API:
+### 14.2 Gaps de segurança de aplicação
 
-1. defina `NODE_ENV=production`;
-2. configure `CORS_ORIGINS` com as origens exatas;
-3. coloque a API atrás de HTTPS e de um proxy reverso;
-4. substitua o rate limit em memória por uma estratégia compartilhada quando houver múltiplas réplicas;
-5. revise a tabela de preços e sua versão antes de exibir valores ao usuário;
-6. monitore `X-Request-Id`, respostas `422`, `429` e `206`;
-7. não prometa previsão, aumento de probabilidade ou retorno financeiro;
-8. não trate o JSON histórico como atualizado sem validar sua fonte e sua data de atualização.
+1. **CORS permissivo por padrão.** Quando `CORS_ORIGINS` está vazio, `cors` recebe `true`. Em produção isso permite qualquer origem. Defina uma lista explícita e teste preflight.
+2. **Ausência de autenticação.** `API_KEYS` é apenas configuração não utilizada. Todos os endpoints são públicos para quem alcança a porta.
+3. **Rate limit local.** O limitador é em memória. Em múltiplas réplicas, cada instância terá sua própria cota; use Redis ou outro store compartilhado.
+4. **Observabilidade insuficiente.** `pino-http` e `prom-client` estão instalados, mas a implementação atual expõe uma métrica fixa e usa `console.error`; não há métricas de latência, erro, rejeições ou cardinalidade controlada.
+5. **Proteção do histórico.** O script de atualização altera arquivo local e não possui trilha de auditoria, assinatura, validação de fonte ou lock de processo.
+6. **SQL gerado sem contrato de esquema.** O export é útil como intercâmbio, mas nomes de tabela e tipos são fixos e não há escape/validação de integração com um banco.
+7. **Upload declarado, não implementado.** `multipart/form-data` aparece no `express.text`, mas não há parser multipart nem fluxo de upload. Deve ser removido do content type aceito ou implementado corretamente.
+8. **Mensagens de erro internas.** Erros desconhecidos são registrados no stdout; em produção, o logger deve controlar dados sensíveis, correlação e retenção.
+9. **Dados no navegador.** Jogos podem ficar no `sessionStorage` e no armazenamento local. Não são dados secretos, mas o produto deve deixar explícito que qualquer script com acesso à origem pode lê-los.
 
-## Solução de problemas
+### 14.3 Gaps de correção e produto
 
-### O frontend não consegue acessar a API
+1. O OpenAPI é incompleto e não descreve os schemas reais.
+2. Os valores de preço e prêmios são estáticos e podem não refletir a operadora.
+3. O `wheel` declara catálogo versionado, mas resolve por expansão completa; não existe catálogo otimizado ou prova independente além do comportamento do código.
+4. A heurística de popularidade não usa dados reais de apostas e o ganho anti-rateio retornado não está ligado a premissas completas em todas as rotas.
+5. `generateFiltered` calcula viabilidade de alguns filtros individualmente; a combinação global pode continuar inviável.
+6. A rota NDJSON materializa todas as combinações antes de escrever, portanto não é streaming de ponta a ponta.
+7. A API de análise aceita jogos possivelmente não ordenados em alguns endpoints, embora a geração os ordene.
+8. `HistoryResult.acumulado` é sempre `false` no parser; o arquivo não fornece esse estado de maneira confiável.
+9. Não há testes de contrato entre frontend e backend.
+10. A documentação de versão mistura branch `feature/v4` com versão de pacote `3.0.0`; deve existir uma política clara de versionamento.
+11. O script de lint do backend não é executável em uma instalação limpa porque ESLint não está declarado no `package.json`.
+12. O frontend anuncia recursos como notificações, bolão e meus jogos, mas eles são locais e não equivalem a contas, push ou colaboração multiusuário.
 
-Confirme se ambos os processos estão em execução e se `frontend/.env.local` aponta para a URL correta:
+## 15. Melhorias recomendadas
 
-```env
-NEXT_PUBLIC_API_URL=http://localhost:3000/api/v1
-```
+### Prioridade P0 — antes de exposição pública
 
-Se o navegador acusar CORS, ajuste `CORS_ORIGINS` no `.env` do backend. Para a configuração padrão deste projeto:
+- Atualizar Next.js, PostCSS, sharp e dependências transitivas vulneráveis; registrar a versão corrigida no lockfile.
+- Configurar `CORS_ORIGINS` de forma obrigatória em `production` e rejeitar configuração permissiva.
+- Adicionar autenticação e autorização para endpoints administrativos e, se necessário, quotas por usuário.
+- Mover rate limit para store compartilhado e limitar separadamente rotas de expansão, histórico e simulação.
+- Remover o content type multipart não implementado.
+- Adicionar limites de CPU, memória, tamanho de lote e tempo de resposta para todos os endpoints combinatórios.
 
-```env
-CORS_ORIGINS=http://localhost:3001
-```
+### Prioridade P1 — robustez e manutenção
 
-Depois, reinicie a API.
+- Completar o OpenAPI com schemas, parâmetros, exemplos, erros e códigos `200/206/400/406/422/500`.
+- Criar testes de contrato usando o OpenAPI e testes de integração do frontend.
+- Adicionar ESLint e configuração compartilhada; corrigir o script `lint` e incluí-lo no CI.
+- Implementar métricas reais com contadores, histogramas e endpoint protegido quando necessário.
+- Fazer o parser de histórico validar intervalo de dezenas, duplicidade, datas e monotonicidade.
+- Implementar leitura streaming real para expansão, evitando construir `combos` completo.
+- Separar `api.routes.ts` em routers menores e extrair schemas/serviços das rotas.
+- Substituir `unknown` no cliente frontend por schemas Zod específicos para cada endpoint.
 
-### A API retorna `422`
+### Prioridade P2 — evolução de produto
 
-Leia `detail`, `invalidParams` e `requestId`. Os números devem ser inteiros entre 1 e 25, sem repetição. Um jogo deve conter entre 15 e 20 dezenas. Em filtros, `min` não pode ser maior que `max`.
+- Criar um adaptador de fonte oficial com ingestão idempotente, checksum, logs e revisão humana.
+- Migrar histórico para banco relacional quando houver escrita concorrente ou necessidade de consulta por volume.
+- Persistir jogos do usuário em conta autenticada somente se o produto realmente precisar desse recurso.
+- Tornar tabela de preço e catálogo de wheels dados versionados com testes de contrato e data de vigência.
+- Quantificar a heurística de popularidade com metodologia reproduzível e declarar intervalo de incerteza.
+- Consolidar nomenclatura e versionamento entre branch, pacote, API e catálogos.
+- Adicionar testes de acessibilidade, navegação por teclado, responsividade e smoke test em navegador.
+- Remover ou rotular com mais clareza as telas que atualmente são apenas armazenamento local.
 
-### A API retorna `206`
+## 16. Operação e solução de problemas
 
-`206` é um resultado parcial, não uma falha HTTP completa. Ele indica que a API gerou parte do lote dentro do orçamento de tentativas ou tempo. O cliente deve ler `meta.partial`, `generatedQuantity`, `attempts` e `rejectionsByConstraint`.
+### O frontend não acessa a API
 
-### O custo exibido parece menor que o esperado
+Confirme que a API está em `localhost:3000`, que o frontend foi iniciado em `3001` e que `frontend/.env.local` aponta para `/api/v1`. Verifique também `CORS_ORIGINS` e o console do navegador.
 
-A API atual retorna o custo de um jogo em determinadas respostas de lote. O frontend multiplica esse valor pela quantidade gerada para a apresentação. Ao criar outro cliente, considere `meta.generatedQuantity` e verifique a versão do contrato antes de mostrar o custo ao usuário.
+### A API retorna 422 ao gerar com filtros
 
-## Como contribuir
+Leia `detail`, `invalidParams` ou `violations`. Se houver `OUT_OF_ACHIEVABLE_RANGE`, o envelope já provou que o filtro é impossível. Se houver `FILTERS_TOO_RESTRICTIVE`, reduza restrições ou aumente `budget.maxAttemptsPerGame` e `budget.maxTotalMs` dentro dos limites aceitos.
 
-1. Faça um fork do repositório.
-2. Crie uma branch descritiva:
+### A API retorna 206
 
-   ```bash
-   git checkout -b feat/nome-da-mudanca
-   ```
+A rota gerou pelo menos um jogo, mas não atingiu a quantidade dentro do orçamento. Use `meta.partial`, `attempts`, `acceptanceRate` e `rejectionsByConstraint` para diagnosticar.
 
-3. Faça a alteração mantendo o domínio independente de Express, Zod e APIs de infraestrutura.
-4. Atualize testes quando alterar comportamento ou contrato.
-5. Execute as verificações:
+### O histórico retorna 404
 
-   ```bash
-   cd backend
-   npm run typecheck
-   npm test
-   ```
+O processo não encontrou `db/resultados.json` no diretório de trabalho atual nem em seu pai. Inicie a API a partir da raiz ou de `backend/` conforme os caminhos suportados e confirme a existência do arquivo.
 
-6. Execute o build do frontend quando alterar a interface:
+### O histórico retorna resultados estranhos
 
-   ```bash
-   cd frontend
-   npm run build
-   ```
+O parser espera a chave `Todos os Resultados`, uma linha de cabeçalho e rows com concurso, data e 15 números. Faça backup antes de editar e execute os testes de histórico.
 
-7. Revise o diff, descreva limitações e abra um Pull Request.
+### O build funciona, mas o lint falha
 
-### Regras para novas funcionalidades
+Na versão documentada, o backend declara `eslint` no script, mas não nas dependências. Instale e configure ESLint como melhoria pendente antes de tratar lint como gate de CI.
 
-- Não introduza afirmações de aumento de probabilidade.
-- Não transforme uma estatística a priori em padrão histórico sem evidência e fonte.
-- Mantenha cálculos financeiros em centavos.
-- Inclua disclaimers junto de score, fechamento, diversificação e valor esperado.
-- Prefira contratos versionados e validação Zod a payloads implícitos.
-- Preserve a natureza stateless da API, salvo decisão arquitetural documentada.
-- Para alterações na API, atualize o OpenAPI, os testes e este README.
+## 17. Contribuição
 
-## Licença
-
-**A definir.** O repositório não contém atualmente um arquivo `LICENSE`. Defina a licença antes de distribuir o software ou aceitar contribuições sob termos formais.
-
-## Contato
-
-- Autor e mantenedor: [barrosrafa no GitHub](https://github.com/barrosrafa)
-- Repositório: [github.com/barrosrafa/app-lotzy](https://github.com/barrosrafa/app-lotzy)
-
-## Referências
-
-[1]: https://github.com/barrosrafa/app-lotzy "Repositório oficial do projeto app-lotzy"
-[2]: https://nodejs.org/ "Documentação oficial do Node.js"
-[3]: https://expressjs.com/ "Documentação oficial do Express"
-[4]: https://nextjs.org/docs "Documentação oficial do Next.js"
-[5]: https://vitest.dev/ "Documentação oficial do Vitest"
-[6]: https://www.gov.br/saude/pt-br/assuntos/saude-de-a-a-z/j/jogo-patologico "Informações do Ministério da Saúde sobre jogo patológico"
-
-
-## Atualização v3 — execução e contratos reforçados
-
-Esta versão consolida as melhorias técnicas do plano v3 no repositório `app-lotzy`. A aplicação permanece **stateless**: não mantém apostas, usuários ou resultados em banco durante a execução da API. O arquivo `db/resultados.json` é um artefato histórico local para análises futuras; ele não é usado para prever concursos e nenhuma funcionalidade altera a probabilidade matemática de uma combinação.
-
-### Principais melhorias implementadas
-
-| Área | Implementação | Efeito observável |
-|---|---|---|
-| Geração aleatória | `CryptoRandomSource` com `crypto.randomInt` e Fisher–Yates parcial | Amostragem sem `Math.random()` nem viés de módulo |
-| Viabilidade | `FilterEngine.checkFeasibility` calcula envelopes alcançáveis antes da geração | Filtros impossíveis terminam imediatamente com `422` e `violations` |
-| Orçamento | Geração filtrada limita tentativas por jogo e tempo total | Respostas parciais usam `206`, `partial` e `acceptanceRate` |
-| Conferência | `POST /api/v1/games/check` recebe `drawnNumbers` e jogos | Retorna acertos, faixas 11–15 e prêmios fixos em centavos |
-| Expansão | `POST /api/v1/games/expand` oferece `json` ou `ndjson` | Expansões grandes são transmitidas em linhas e cedem o event loop a cada 2.000 itens |
-| Valores monetários | `StaticPriceTable` mantém `betPriceCents`, prêmios e versão | Evita floats e hard-code espalhado nas rotas |
-| Erros | Respostas inválidas seguem `application/problem+json` | Erros incluem `type`, `status`, `instance`, `requestId` e parâmetros inválidos |
-| Correlação | Cada requisição recebe ou preserva `X-Request-Id` | O identificador aparece no header e nos metadados das respostas de negócio |
-| Contrato | OpenAPI 3.1 disponível em `/api/v1/openapi.json` | As rotas versionadas podem ser descobertas por clientes e ferramentas |
-| Frontend | Next.js com volante acessível, estados textuais e páginas de geração, conferência, validação e análise | Interface responsiva sem depender apenas de cor para comunicar estado |
-
-### Monorepo: comandos recomendados
-
-A raiz agora oferece scripts para o fluxo completo. Execute:
+Antes de abrir uma alteração:
 
 ```bash
 npm ci --prefix backend
 npm ci --prefix frontend
-npm test
 npm run typecheck
+npm test
 npm run build
 ```
 
-`npm run build` compila a API TypeScript e, em seguida, executa `next build` no frontend. O erro anterior em que o script procurava `backend/frontend/package.json` foi corrigido para apontar para `../frontend`.
+Toda mudança de regra matemática deve incluir teste determinístico e explicar se altera apenas composição, custo, variância ou alguma garantia condicional. Nenhuma documentação, interface ou resposta de API deve sugerir que um filtro aumenta a probabilidade do sorteio.
 
-Para desenvolvimento, use dois terminais quando quiser trabalhar na API e na interface ao mesmo tempo:
+Toda mudança de endpoint deve atualizar a tabela deste README, o OpenAPI e os testes HTTP. Toda mudança de dependência deve atualizar o lockfile e registrar o resultado de `npm audit`.
 
-```bash
-# Terminal 1 — API, porta 3000
-npm run dev
+### Checklist de pull request
 
-# Terminal 2 — Next.js, porta 3001
-npm run dev:frontend
-```
+- [ ] A mudança tem teste automatizado apropriado.
+- [ ] Typecheck e build passam.
+- [ ] O contrato OpenAPI foi atualizado.
+- [ ] O README e os diagramas estão coerentes.
+- [ ] Não há segredo, token ou `.env` versionado.
+- [ ] Os limites de entrada e custo computacional foram revisados.
+- [ ] A copy preserva o aviso de jogo responsável.
+- [ ] Dependências novas foram auditadas.
 
-Também é possível executar os comandos diretamente em cada pacote:
+## 18. Licença e referências
 
-```bash
-cd backend && npm run dev
-cd frontend && npm run dev
-```
+Não há arquivo de licença na raiz desta branch. O uso, redistribuição e contribuição devem ser definidos pelo mantenedor antes de publicar o projeto como software distribuível.
 
-A API usa `http://localhost:3000` e o frontend usa `http://localhost:3001`. O cliente web aponta por padrão para `http://localhost:3000/api/v1`; para outra origem, configure `frontend/.env.local`:
+### Referências técnicas
 
-```env
-NEXT_PUBLIC_API_URL=http://localhost:3000/api/v1
-```
+[1]: https://nodejs.org/api/crypto.html "Node.js Crypto API"
+[2]: https://expressjs.com/ "Express documentation"
+[3]: https://zod.dev/ "Zod documentation"
+[4]: https://nextjs.org/docs "Next.js documentation"
+[5]: https://vitest.dev/guide/ "Vitest guide"
+[6]: https://mermaid.js.org/intro/ "Mermaid documentation"
+[7]: https://owasp.org/www-project-application-security-verification-standard/ "OWASP Application Security Verification Standard"
+[8]: https://www.gov.br/saude/pt-br/assuntos/saude-de-a-a-z/j/jogo-patologico "Informações do Ministério da Saúde sobre jogo patológico"
+[9]: https://github.com/barrosrafa/app-lotzy/tree/feature/v4 "Código-fonte da branch feature/v4"
+[10]: ./plan/SSD-lotofacil-api-2.md "Especificação da API Lotofácil"
+[11]: ./plan/SSD-lotzy-frontend.md "Especificação do frontend Lotzy"
 
-### Respostas parciais e falha rápida
-
-A rota `POST /api/v1/games/generate-filtered` nunca deve permanecer tentando indefinidamente. O pedido aceita `budget.maxAttemptsPerGame` e `budget.maxTotalMs`. Quando o envelope matemático já prova que a restrição é impossível, a API responde `422` antes de sortear. Quando o orçamento termina depois de gerar pelo menos um jogo, responde `206` com `partial` e `acceptanceRate`.
-
-Os exemplos são abreviados: um jogo real sempre contém de 15 a 20 dezenas distintas. Se nenhum jogo for produzido, a resposta é `422` com `FILTERS_TOO_RESTRICTIVE` e as contagens de rejeição.
-
-### Expansão NDJSON
-
-Para desdobrar 16–20 dezenas, prefira:
-
-```bash
-curl -N -X POST http://localhost:3000/api/v1/games/expand \
-  -H 'Content-Type: application/json' \
-  -d '{"numbers":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"format":"ndjson"}'
-```
-
-A primeira linha contém metadados. As demais contêm um objeto `{ "game": [...] }`. O formato JSON permanece disponível para respostas de até 1.000 combinações; acima desse limite a API exige NDJSON com `406` para evitar acumular uma resposta grande em memória. A escrita é feita em fatias de até 2.000 combinações, com `setImmediate` entre fatias.
-
-### Conferência de jogos
-
-`POST /api/v1/games/check` valida que `drawnNumbers` tenha exatamente 15 dezenas distintas e informa a faixa de cada jogo. As faixas 11, 12 e 13 possuem valores fixos da tabela versionada; 14 e 15 são marcadas como `pari-mutuel`, pois dependem do rateio do concurso. Dezenas duplicadas no sorteio oficial são rejeitadas com `422`.
-
-### Limites e responsabilidade
-
-Os filtros de soma, paridade, primos, Fibonacci, moldura, repetição e popularidade são ferramentas de composição e organização. Popularidade é uma heurística comportamental, não uma propriedade do sorteio. O histórico não prevê o próximo resultado; backtesting pode descrever o passado, mas não demonstra capacidade preditiva. A probabilidade de uma aposta simples de 15 dezenas permanece **1 em 3.268.760**. Aposte somente valores que possa perder e consulte os recursos de jogo responsável apresentados pela aplicação.
-
-### Validação executada nesta versão
-
-A suíte automatizada cobre geração, invariantes do domínio, envelope inviável, `requestId`, resposta parcial, validação RFC 9457 e rejeição de sorteio duplicado. A validação final foi executada com:
-
-```text
-npm test -- --run       → 18 testes aprovados
-npm run typecheck       → aprovado
-npm run build           → API + frontend aprovados
-```
-
-O build do frontend também foi revisado para usar `align-items:flex-end`, evitando o aviso de compatibilidade do Autoprefixer sobre `align-items:end`.
+A documentação técnica foi escrita a partir dos arquivos presentes na branch `feature/v4`, dos manifests, dos testes executados e da auditoria local de dependências. Os números de vulnerabilidades e resultados de build devem ser revalidados em cada pipeline, porque dependências e advisories mudam com o tempo.
