@@ -34,6 +34,7 @@ const dozen = z.number().int().min(1).max(25);
 const uniqueNumbers = (message = "Dezenas duplicadas.") =>
   z.array(dozen).refine((a) => new Set(a).size === a.length, message);
 const game = uniqueNumbers("Jogo contém dezenas duplicadas.").min(15).max(20);
+const historicDraw = uniqueNumbers("Concurso contém dezenas duplicadas.").length(15);
 
 const desdobrarSchema = z
   .object({
@@ -54,13 +55,13 @@ const desdobrarSchema = z
 
 const simularSchema = z
   .object({
-    cartoes: z.array(game).min(1).optional(),
-    jogos: z.array(game).min(1).optional(),
-    games: z.array(game).min(1).optional(),
+    cartoes: z.array(game).min(1).max(500).optional(),
+    jogos: z.array(game).min(1).max(500).optional(),
+    games: z.array(game).min(1).max(500).optional(),
     dezenas: game.optional(),
     concursoInicio: z.number().int().positive().optional(),
     concursoFim: z.number().int().positive().optional(),
-    historicDraws: z.array(z.array(dozen).length(15)).min(1).optional(),
+    historicDraws: z.array(historicDraw).min(1).max(5000).optional(),
   })
   .refine(
     (data) => data.cartoes || data.jogos || data.games || data.dezenas,
@@ -139,6 +140,21 @@ jogosRoutes.post("/simular", async (req, res, next) => {
             (body.concursoFim === undefined || row.concurso <= body.concursoFim),
         )
         .map((r) => ({ concurso: r.concurso, dezenas: r.dezenas }));
+    }
+
+    if (rawCartoes.length > 500) {
+      throw new AppError(
+        "TOO_MANY_GAMES",
+        "O limite de simulação é de 500 cartões por requisição.",
+        422,
+      );
+    }
+    if (draws.length > 5000) {
+      throw new AppError(
+        "TOO_MANY_DRAWS",
+        "O limite de simulação é de 5.000 concursos por requisição.",
+        422,
+      );
     }
 
     if (draws.length === 0) {
