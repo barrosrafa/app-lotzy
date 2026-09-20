@@ -19,6 +19,13 @@ const schema = z.object({
   PRICE_TABLE_VERSION: z.string().default("2024-11-04"),
   WHEEL_CATALOG_VERSION: z.string().default("wheels-2026-09"),
   POPULARITY_MODEL_VERSION: z.string().default("popularity-2026-09"),
+  AUTH_JWT_SECRET: z.string().default(""),
+  ADMIN_API_KEYS: z.string().default("").transform((value) => value.split(",").filter(Boolean).map((entry) => {
+    const [key, role = "admin"] = entry.split(":");
+    return { key, role: role === "user" ? "user" : "admin" } as const;
+  })),
+  RATE_LIMIT_STORE: z.enum(["memory", "redis"]).default("memory"),
+  REDIS_URL: z.string().url().optional(),
 });
 export type Env = z.infer<typeof schema>;
 export const env: Env = schema.parse(process.env);

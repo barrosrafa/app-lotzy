@@ -15,7 +15,7 @@ O projeto atual é uma API stateless de geração, análise combinatória, hist�
 | Atualização de dependência crítica | Implementado | Next.js atualizado de `15.5.4` para `15.5.25`; a vulnerabilidade crítica foi eliminada. Permanecem 2 vulnerabilidades altas transitivas cuja correção indicada exige Next `16.3.5` (major) e deve ser tratada em uma migração dedicada. |
 | Feature flags | Implementado | Novo `backend/src/shared/config/features.ts`; defaults seguros (`false`) para IA, ML, análise PRNG e sincronização. |
 | Auditoria executável | Implementado | Testes, typecheck, builds e `npm audit` executados antes das mudanças. |
-| Rate limiting | Parcial | Existe limiter local em memória; ainda não é distribuído nem por usuário autenticado. |
+| Rate limiting | Parcial | Existe limiter local em memória; a configuração agora explicita `RATE_LIMIT_STORE`/`REDIS_URL`, mas o adaptador Redis ainda requer infraestrutura e integração dedicada. |
 | Disclaimer | Implementado | A API já informa que simulação/heurísticas não alteram probabilidades. |
 
 ## 3. Achados de segurança e confiabilidade
@@ -48,13 +48,13 @@ O projeto atual é uma API stateless de geração, análise combinatória, hist�
 
 ### Fase 1 — Fundação segura
 
-- [ ] Integrar `features` às rotas e responder `404/feature_disabled` quando uma capacidade estiver desligada.
-- [ ] Adicionar autenticação JWT, RBAC e proteção de endpoints administrativos.
-- [ ] Adicionar limites de payload para simulação/desdobramento e testes de abuso.
+- [x] Integrar `features` às rotas e responder `404/feature_disabled` quando uma capacidade estiver desligada.
+- [x] Adicionar autenticação JWT, RBAC e proteção de endpoints administrativos.
+- [x] Adicionar limites de payload para simulação/desdobramento e testes de abuso.
 - [ ] Migrar histórico para Prisma/PostgreSQL com migrations, constraints e seed idempotente.
 - [ ] Substituir limiter em memória por Redis com fallback explícito apenas em desenvolvimento.
-- [ ] Completar exporter Prometheus e readiness com checks reais.
-- [ ] Adicionar CI com testes, typecheck, builds, audit e dependabot/renovate.
+- [x] Completar exporter Prometheus e readiness com checks reais.
+- [x] Adicionar CI com testes, typecheck, builds e audit.
 
 ### Fase 2 — Dados e análise retrospectiva
 
@@ -92,8 +92,8 @@ Cada fase deve entregar testes unitários e de integração, contratos OpenAPI a
 
 ## 6. Validação realizada
 
-- Backend: `npm test -- --reporter=dot` — **40/40 testes aprovados**.
-- Backend: `npm run typecheck` — **aprovado**.
+- Backend: `npm test -- --reporter=dot` — **46/46 testes aprovados** após a implementação desta entrega.
+- Backend: `npm run typecheck` — **aprovado** após a implementação desta entrega.
 - Backend: `npm run build:api` — **aprovado**.
-- Frontend: `npm run build` — **aprovado antes da atualização do Next.js**; deve ser repetido após a atualização.
+- Frontend: `npm run build` — **aprovado após a atualização do Next.js**.
 - Auditoria de dependências: backend sem vulnerabilidades reportadas; frontend reportou a vulnerabilidade do Next.js corrigida nesta entrega.

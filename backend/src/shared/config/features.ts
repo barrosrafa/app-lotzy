@@ -20,3 +20,4 @@ export const features = schema.parse({
 });
 
 export type Features = typeof features;
+export type FeatureName = keyof Features;

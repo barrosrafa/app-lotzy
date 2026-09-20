@@ -1,6 +1,6 @@
 # Lotzy — gerador e analisador de jogos da Lotofácil
 
-**Branch documentada:** `feature/v6`
+**Branch documentada:** `main`
 **Commit analisado:** `96c8667` (`feat: expand filters and add weighted generation`)
 **Versão dos manifests:** `3.0.0` no monorepo e no backend; `1.0.0` no frontend.
 **Idioma da aplicação e desta documentação:** português brasileiro.
@@ -57,7 +57,7 @@ A API inclui `X-Request-Id` em suas respostas. Se o cliente enviar esse cabeçal
 | Histórico | Consulta paginada, filtros por concurso/data e exportação CSV, TXT, JSON ou SQL. |
 | Estatísticas | Atrasos, temperatura, composição, ciclos, sazonalidade e resumo do último concurso. |
 | Ferramentas | Valor esperado, verificação de orçamento, simulação histórica, backtest e variações. |
-| Operação | `/health`, `/ready`, `/metrics`, OpenAPI, Helmet, CORS, limite de corpo e rate limit. |
+| Operação | `/health`, `/ready`, `/metrics`, OpenAPI, Helmet, CORS, limite de corpo, rate limit, métricas Prometheus e autenticação administrativa. |
 | Processamento pesado | `worker_threads` para desdobramento e simulação nas rotas `/api/jogos`. |
 
 ### 2.2 O que o projeto não implementa
@@ -143,7 +143,7 @@ A pasta `plan/` foi removida desta branch para não manter uma segunda fonte de 
 |---|---|
 | Raiz | npm scripts, monorepo sem workspaces declarados, TypeScript nas aplicações. |
 | Backend | Node.js `>=20`, TypeScript `5.9`, Express `5.1`, Zod `4.1`, Helmet, CORS, `express-rate-limit`, `pino-http`, `prom-client`, `tsx`, Vitest e Supertest. |
-| Frontend | Next.js `15.5.4`, React `19.1.0`, SWR `2.5.1`, Zod `4.1` e TypeScript `5.9`. |
+| Frontend | Next.js 15.5.25, React 19.1.0, SWR 2.5.1, Zod 4.1 e TypeScript 5.9. |
 
 Os lockfiles de `backend/` e `frontend/` devem ser usados para instalações reprodutíveis.
 
@@ -169,7 +169,9 @@ As variáveis reconhecidas pelo backend são:
 | `WHEEL_CATALOG_VERSION` | `wheels-2026-09` | Versão configurável do catálogo; a resposta de wheel declara `wheels-2026-09`. |
 | `POPULARITY_MODEL_VERSION` | `popularity-2026-09` | Versão do modelo heurístico de popularidade. |
 
-`API_KEYS` aparece no `.env.example`, mas não é lida por `env.ts` nem aplicada a middleware; portanto não habilita autenticação.
+`ADMIN_API_KEYS` aceita entradas no formato `chave:papel`, por exemplo `admin-secret:admin`. A rota administrativa exige `Authorization: Bearer <JWT>` assinado por `AUTH_JWT_SECRET` ou uma dessas chaves em `X-API-Key`; o RBAC aceita os papéis `user` e `admin`. Segredos não devem ser versionados.
+
+`RATE_LIMIT_STORE=memory` é adequado somente para desenvolvimento/testes. Em produção, configure um armazenamento distribuído compatível com a infraestrutura antes de habilitar múltiplas instâncias; `REDIS_URL` já está reservado para essa integração. A persistência PostgreSQL/Prisma e o adaptador Redis distribuído permanecem fases futuras do plano.
 
 O frontend usa `NEXT_PUBLIC_API_URL` em tempo de build. Se a variável não existir, usa `http://localhost:3000`. Se existir, remove um sufixo `/api` ou `/api/v1` antes de montar as URLs.
 
@@ -259,7 +261,8 @@ As rotas de negócio principais são montadas sob `/api/v1`. As rotas legadas de
 |---|---|---|
 | `GET` | `/health` | `{ "status": "ok" }`. Liveness. |
 | `GET` | `/ready` | Status e checks estáticos de tabela de preços e catálogo de wheels. Não testa o arquivo histórico. |
-| `GET` | `/metrics` | Texto com apenas `lotzy_up 1`; não é um exporter Prometheus completo. |
+| `GET` | `/metrics` | Exporter Prometheus com métricas HTTP, duração, processo e falhas de readiness. |
+| `POST` | `/api/v1/admin/sync` | Endpoint administrativo protegido; retorna `404` enquanto `FEATURE_DATA_SYNC=false`, mesmo com autenticação válida. |
 | `GET` | `/api/v1/openapi.json` | Documento OpenAPI definido em `infrastructure/http/openapi`. |
 
 ### 8.2 Geração e análise de jogos

@@ -17,6 +17,10 @@ import { loteRoutes } from "./infrastructure/http/routes/lote.routes.js";
 import { phase2Routes } from "./infrastructure/http/routes/phase2.routes.js";
 import { concursosRoutes } from "./infrastructure/http/routes/concursos.routes.js";
 import { jogosRoutes } from "./infrastructure/http/routes/jogos.routes.js";
+import { adminRoutes } from "./infrastructure/http/routes/admin.routes.js";
+import { loadResults } from "./infrastructure/data/results.js";
+import { metricsRegistry, httpRequestsTotal, httpRequestDuration, readinessFailures } from "./infrastructure/metrics/prometheus.js";
+import { features } from "./shared/config/features.js";
 export function createApp() {
   const app = express();
   app.disable("x-powered-by");
@@ -39,6 +43,15 @@ export function createApp() {
     }),
   );
   app.use(express.json({ limit: "256kb" }));
+  app.use((req, res, next) => {
+    const started = process.hrtime.bigint();
+    res.on("finish", () => {
+      const route = req.route?.path ?? req.path;
+      httpRequestsTotal.labels(req.method, route, String(res.statusCode)).inc();
+      httpRequestDuration.labels(req.method, route).observe(Number(process.hrtime.bigint() - started) / 1e9);
+    });
+    next();
+  });
   app.use(
     "/api/v1/games/check/lote",
     express.text({
@@ -52,12 +65,14 @@ export function createApp() {
     }),
   );
   app.get("/health", (_req, res) => res.json({ status: "ok" }));
-  app.get("/ready", (_req, res) =>
-    res.json({
-      status: "ready",
-      checks: { priceTable: true, wheelCatalog: true },
-    }),
-  );
+  app.get("/ready", (_req, res) => {
+    let history = true;
+    let historyCount = 0;
+    try { historyCount = loadResults().length; history = historyCount > 0; } catch { history = false; }
+    const checks = { priceTable: true, wheelCatalog: true, history, historyCount };
+    if (!history) readinessFailures.inc();
+    return res.status(history ? 200 : 503).json({ status: history ? "ready" : "not_ready", checks, features });
+  });
   app.use("/api", historyRoutes);
   app.use("/api/v1/stats", phase2Routes);
   app.use("/api/v1", phase2Routes);
@@ -65,11 +80,7 @@ export function createApp() {
   app.use("/api/v1/games", statsRoutes);
   app.use("/api/v1/games/check/lote", loteRoutes);
   app.get("/metrics", (_req, res) =>
-    res
-      .type("text/plain")
-      .send(
-        "# HELP lotzy_up API liveness\n# TYPE lotzy_up gauge\nlotzy_up 1\n",
-      ),
+    metricsRegistry.metrics().then((body) => res.type(metricsRegistry.contentType).send(body)),
   );
   app.get("/api/v1/openapi.json", (_req, res) => res.json(openapi));
   const standard = rateLimit({
@@ -97,6 +108,7 @@ export function createApp() {
   app.use("/api/v1/games", standard, gameRoutes);
   app.use("/api/v1/games", heavy, advancedRoutes);
   app.use("/api/v1/tools", standard, toolRoutes);
+  app.use("/api/v1/admin", adminRoutes);
   app.use(errorHandler);
   return app;
 }
