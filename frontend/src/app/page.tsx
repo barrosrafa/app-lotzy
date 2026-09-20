@@ -1,12 +1,188 @@
 'use client';
+
 import { useState } from 'react';
-import { generateRandom, type GeneratedResponse } from '@/lib/api';
+import { useRouter } from 'next/navigation';
+import { generateRandom, validateAndAnalyzeBatch, type GeneratedResponse, formatMoney, useLatestConcurso } from '@/lib/api';
+import { saveValidatedGamesToLocalStorage } from '@/lib/localGames';
 import { PlayslipGrid } from '@/components/PlayslipGrid';
 
-function money(cents: number) { return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(cents / 100); }
-function GameRow({ game, index }: { game: number[]; index: number }) { return <div className="game-row"><span className="game-index">{String(index + 1).padStart(2, '0')}</span><div className="mini-grid">{game.map(number => <span className="mini-number" key={number}>{String(number).padStart(2, '0')}</span>)}</div></div>; }
+function GameRow({ game, index }: { game: number[]; index: number }) {
+  return (
+    <div className="game-row">
+      <span className="game-index">{String(index + 1).padStart(2, '0')}</span>
+      <div className="mini-grid">
+        {game.map(number => (
+          <span className="mini-number" key={number}>
+            {String(number).padStart(2, '0')}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function HomePage() {
-  const [quantity, setQuantity] = useState(5); const [numbersPerGame, setNumbersPerGame] = useState(15); const [result, setResult] = useState<GeneratedResponse>(); const [error, setError] = useState(''); const [loading, setLoading] = useState(false);
-  async function submit() { setLoading(true); setError(''); try { setResult(await generateRandom(quantity, numbersPerGame)); } catch (e) { setError(e instanceof Error ? e.message : 'Não foi possível gerar os jogos.'); } finally { setLoading(false); } }
-  return <main className="main"><div className="intro"><div><span className="eyebrow">Geração responsável · Lotofácil</span><h1>Marque o papel. Entenda o jogo.</h1><p>Gere combinações uniformes usando a API Lotzy e veja custo, quantidade e limites com transparência. O produto organiza escolhas; não prevê sorteios.</p></div><div className="hero-card"><span className="eyebrow" style={{color:'#8bb9f5'}}>O que importa</span><div className="metric">{result ? result.meta.generatedQuantity : '—'} <small>jogos no lote</small></div><p>Seu resultado aparece aqui depois da geração, com o custo total e o aviso recebido do servidor.</p></div></div><div className="paper-card"><div className="controls"><label>Quantidade<input type="number" min={1} max={500} value={quantity} onChange={e => setQuantity(Math.min(500, Math.max(1, Number(e.target.value))))} /></label><label>Dezenas por jogo<select value={numbersPerGame} onChange={e => setNumbersPerGame(Number(e.target.value))}>{[15,16,17,18,19,20].map(n => <option key={n} value={n}>{n} dezenas</option>)}</select></label><button className="btn btn-primary" onClick={submit} disabled={loading}>{loading ? 'Gerando…' : 'Gerar jogos'}</button></div>{error && <div className="error" role="alert">{error}</div>}<div className="disclaimer"><p><strong>Antes de gerar:</strong> cada combinação tem a mesma probabilidade. Evitar padrões populares pode afetar rateio, mas não aumenta a chance de acerto.</p></div></div><section className="grid-layout" style={{marginTop:24}}><PlayslipGrid /><div className="paper-card"><div style={{display:'flex',justifyContent:'space-between',gap:14,alignItems:'baseline',marginBottom:14}}><div><span className="eyebrow">Resultado</span><h2>Seu lote de combinações</h2></div>{result && <span className="status">{result.meta.generatedQuantity}/{quantity} gerados</span>}</div>{result ? <><div className="stat-grid" style={{marginBottom:16}}><div className="stat"><span>Custo do lote</span><b>{money(result.cost.totalCents * result.meta.generatedQuantity)}</b></div><div className="stat"><span>Apostas simples</span><b>{result.cost.simpleBets * result.meta.generatedQuantity}</b></div><div className="stat"><span>Dezenas</span><b>{result.meta.numbersPerGame}</b></div></div><div className="result-list">{result.data.map((entry: { game: number[] }, index: number) => <GameRow key={`${index}-${entry.game.join('-')}`} game={entry.game} index={index} />)}</div><div className="disclaimer"><p>{result.disclaimer}</p></div></> : <div className="empty"><div><strong>O resultado é o herói desta tela.</strong><p>Escolha o tamanho do lote e gere uma combinação para preencher este espaço.</p></div></div>}</div></section></main>;
+  const router = useRouter();
+  const { latest, isLoading: isLatestLoading } = useLatestConcurso();
+  const [quantity, setQuantity] = useState(5);
+  const [numbersPerGame, setNumbersPerGame] = useState(15);
+  const [result, setResult] = useState<GeneratedResponse>();
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  async function submit() {
+    setLoading(true);
+    setError('');
+    setMessage('');
+    try {
+      const generated = await generateRandom(quantity, numbersPerGame);
+      const validated = await validateAndAnalyzeBatch(generated);
+      sessionStorage.setItem('lotzy:validated-games', JSON.stringify(validated));
+      setResult(generated);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Não foi possível gerar os jogos.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function saveGames() {
+    try {
+      const savedCount = saveValidatedGamesToLocalStorage();
+      setMessage(`${savedCount} ${savedCount === 1 ? 'jogo salvo' : 'jogos salvos'} em Meus jogos.`);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Não foi possível salvar o lote.');
+    }
+  }
+
+  return (
+    <main className="main">
+      <div className="intro">
+        <div>
+          <span className="eyebrow">Geração responsável · Lotofácil</span>
+          <h1>Marque o papel. Entenda o jogo.</h1>
+          <p>Gere combinações uniformes e revise cada lote antes de exibi-lo. O Lotzy organiza escolhas; não prevê sorteios.</p>
+        </div>
+        <div className="hero-card">
+          <span className="eyebrow" style={{ color: '#8bb9f5' }}>Último Concurso Registrado</span>
+          {isLatestLoading ? (
+            <div className="skeleton" style={{ height: 48, margin: '12px 0' }} />
+          ) : latest ? (
+            <div>
+              <div className="metric">
+                #{latest.concurso.concurso} <small>{latest.concurso.data}</small>
+              </div>
+              <div className="drawn-numbers" style={{ marginTop: 8 }}>
+                {latest.concurso.dezenas.map(num => (
+                  <span key={num} style={{ background: '#2f343b', color: '#fff' }}>
+                    {String(num).padStart(2, '0')}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="metric">01 <small>gerar</small></div>
+          )}
+          <p style={{ margin: 0, fontSize: 13 }}>
+            Após gerar, o lote é validado pela API. Escolha se deseja analisá-lo ou salvá-lo.
+          </p>
+        </div>
+      </div>
+
+      <div className="paper-card">
+        <div className="controls">
+          <label>
+            Quantidade
+            <input
+              type="number"
+              min={1}
+              max={500}
+              value={quantity}
+              onChange={e => setQuantity(Math.min(500, Math.max(1, Number(e.target.value))))}
+            />
+          </label>
+          <label>
+            Dezenas por jogo
+            <select value={numbersPerGame} onChange={e => setNumbersPerGame(Number(e.target.value))}>
+              {[15, 16, 17, 18, 19, 20].map(n => (
+                <option key={n} value={n}>{n} dezenas</option>
+              ))}
+            </select>
+          </label>
+          <button className="btn btn-primary" onClick={submit} disabled={loading} aria-busy={loading}>
+            {loading ? 'Gerando…' : 'Gerar jogos'}
+          </button>
+          <button className="btn btn-secondary" type="button" onClick={() => router.push('/filtros')}>
+            Usar filtros
+          </button>
+        </div>
+
+        {error && <div className="error" role="alert">{error}</div>}
+
+        <div className="disclaimer">
+          <p><strong>Antes de gerar:</strong> cada combinação tem a mesma probabilidade. Evitar padrões populares pode afetar rateio, mas não aumenta a chance de acerto.</p>
+        </div>
+      </div>
+
+      <section className="grid-layout" style={{ marginTop: 24 }}>
+        <PlayslipGrid />
+        <div className="paper-card">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow">Prévia</span>
+              <h2>O resultado aparece após gerar</h2>
+            </div>
+            {result && <span className="status">{result.meta.generatedQuantity} jogos</span>}
+          </div>
+
+          {loading ? (
+            <div className="history-skeleton" aria-label="Gerando jogos" aria-busy="true">
+              {Array.from({ length: Math.min(quantity, 5) }, (_, i) => (
+                <span key={i} />
+              ))}
+            </div>
+          ) : result ? (
+            <>
+              <div className="controls" style={{ marginTop: 0 }}>
+                <button className="btn btn-primary" type="button" onClick={() => router.push('/analisar')}>
+                  Analisar
+                </button>
+                <button className="btn btn-secondary" type="button" onClick={saveGames}>
+                  Salvar (Meus jogos)
+                </button>
+              </div>
+              {message && <div className="success" role="status">{message}</div>}
+              <div className="stat-grid" style={{ marginBottom: 16 }}>
+                <div className="stat">
+                  <span>Custo do lote</span>
+                  <b>{formatMoney(result.cost.totalCents * result.meta.generatedQuantity)}</b>
+                </div>
+                <div className="stat">
+                  <span>Apostas simples</span>
+                  <b>{result.cost.simpleBets * result.meta.generatedQuantity}</b>
+                </div>
+                <div className="stat">
+                  <span>Dezenas</span>
+                  <b>{result.meta.numbersPerGame}</b>
+                </div>
+              </div>
+              <div className="result-list">
+                {result.data.map((entry: { game: number[] }, index: number) => (
+                  <GameRow key={`${index}-${entry.game.join('-')}`} game={entry.game} index={index} />
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="empty">
+              <div>
+                <strong>O resultado é o herói desta tela.</strong>
+                <p>Escolha o tamanho do lote ou abra os filtros para começar.</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
+    </main>
+  );
 }

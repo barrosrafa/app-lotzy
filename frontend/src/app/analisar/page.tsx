@@ -1,1 +1,2 @@
-import { AnalyzePage } from '../aux-pages'; export default AnalyzePage;
+import { AnalyzePage } from '../aux-pages';
+export default AnalyzePage;

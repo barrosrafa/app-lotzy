@@ -1,35 +1,829 @@
-import { Router } from 'express';
-import { z } from 'zod';
-import { UNIVERSE, MIN_GAME_SIZE, MAX_GAME_SIZE, simpleBetCount } from '../../../domain/games/constants.js';
-import { CryptoRandomSource } from '../../random/CryptoRandomSource.js';
-import { GameGenerator } from '../../../domain/games/services/GameGenerator.js';
-import { GameAnalyzer } from '../../../domain/games/services/GameAnalyzer.js';
-import { FilterEngine } from '../../../domain/games/services/FilterEngine.js';
-import { DiversityAnalyzer } from '../../../domain/games/services/DiversityAnalyzer.js';
-import { expand } from '../../../domain/games/services/CombinationExpander.js';
-import { ExpectedValueCalculator } from '../../../domain/games/services/ExpectedValueCalculator.js';
-import { costFor, priceTable } from '../../pricing/StaticPriceTable.js';
-import { AppError, InfeasibleFiltersError } from '../../../shared/errors/AppError.js';
-import { env } from '../../../shared/config/env.js';
-const range=z.object({min:z.number().int().optional(),max:z.number().int().optional()}).refine(r=>r.min===undefined||r.max===undefined||r.min<=r.max,'min must not exceed max');
-const dozen=z.number().int().min(1).max(25);
-const game=z.array(dozen).min(15).max(20).refine(a=>new Set(a).size===a.length,'Duplicated numbers.');
-const generator=new GameGenerator(new CryptoRandomSource()); const analyzer=new GameAnalyzer(); const filters=new FilterEngine(); const diversity=new DiversityAnalyzer();
-const fmt=(requestId:string,data:unknown,extra:Record<string,unknown>={})=>({status:'success',meta:{requestId,...extra},data});
-const disclaimer='Nenhuma combinação tem probabilidade superior a outra. Filtros, popularidade, fechamento e diversificação não aumentam a probabilidade de premiação.';
-const rateio=17;
-const metrics=(g:number[])=>analyzer.analyze(g);
-function uniqueGames(quantity:number,size:number,pool:number[],fixed:number[],filter:Record<string,unknown>,budget:{maxAttemptsPerGame:number;maxTotalMs:number}){const out:number[][]=[];const seen=new Set<string>();const rejects:Record<string,number>={};let attempts=0;const started=Date.now();const spec=filter as any;while(out.length<quantity&&attempts<quantity*budget.maxAttemptsPerGame&&Date.now()-started<budget.maxTotalMs){attempts++;const candidate=[...fixed,...generator.draw(size-fixed.length,pool.filter(n=>!fixed.includes(n)))].sort((a,b)=>a-b);if(!filters.check(candidate,spec)){for(const k of ['evens','primes','fibonacci','sum','frame','maxConsecutiveRun','repeatsFromPrevious']){if(spec[k]!==undefined)rejects[k]=(rejects[k]??0)+1;}continue;}const m=metrics(candidate);if(spec.maxPopularityScore!==undefined&&m.popularity.score>spec.maxPopularityScore){rejects.popularity=(rejects.popularity??0)+1;continue;}if(spec.maxOverlapWithBatch!==undefined&&out.some(g=>g.filter(n=>candidate.includes(n)).length>spec.maxOverlapWithBatch)){rejects.overlap=(rejects.overlap??0)+1;continue;}const key=candidate.join('-');if(seen.has(key)){rejects.duplicate=(rejects.duplicate??0)+1;continue;}seen.add(key);out.push(candidate);}return {games:out,attempts,partial:out.length<quantity,acceptanceRate:attempts?out.length/attempts:0,rejectionsByConstraint:rejects};}
-export const gameRoutes=Router();
-gameRoutes.post('/generate-random',(req,res,next)=>{try{const body=z.object({quantity:z.number().int().min(1).max(500).default(1),numbersPerGame:z.number().int().min(15).max(20).default(15),unique:z.boolean().default(true)}).strict().parse(req.body);const games:number[][]=[];const seen=new Set<string>();while(games.length<body.quantity){const g=generator.draw(body.numbersPerGame,UNIVERSE);if(!body.unique||!seen.has(g.join('-'))){seen.add(g.join('-'));games.push(g);}}const requestId=String(req.headers['x-request-id']);const cost=costFor(body.numbersPerGame);return res.json({...fmt(requestId,games.map(game=>({game})),{generatedQuantity:games.length,numbersPerGame:body.numbersPerGame,priceTableVersion:priceTable.version}),cost,expectedValue:{fixedTiersCents:90,note:'Parcela determinística. Faixas 14 e 15 requerem premissas.'},disclaimer,responsibleGamblingUrl:env.RESPONSIBLE_GAMBLING_URL});}catch(e){next(e);}});
-gameRoutes.post('/generate-filtered',(req,res,next)=>{try{const body=z.object({quantity:z.number().int().min(1).max(100).default(1),numbersPerGame:z.number().int().min(15).max(20).default(15),fixedNumbers:z.array(dozen).max(20).default([]),excludedNumbers:z.array(dozen).max(10).default([]),filters:z.object({evens:range.optional(),primes:range.optional(),fibonacci:range.optional(),sum:range.optional(),frame:range.optional(),maxConsecutiveRun:z.number().int().min(2).max(15).optional(),maxPopularityScore:z.number().min(0).max(1).optional(),maxOverlapWithBatch:z.number().int().min(5).max(20).optional(),repeatsFromPrevious:z.object({previousDraw:z.array(dozen).length(15),min:z.number().int().min(0).max(15).optional(),max:z.number().int().min(0).max(15).optional()}).optional()}).default({}),budget:z.object({maxAttemptsPerGame:z.number().int().min(100).max(50000).default(5000),maxTotalMs:z.number().int().min(50).max(5000).default(1000)}).default({maxAttemptsPerGame:5000,maxTotalMs:1000})}).strict().parse(req.body);if(new Set(body.fixedNumbers).size!==body.fixedNumbers.length||new Set(body.excludedNumbers).size!==body.excludedNumbers.length)throw new AppError('VALIDATION_FAILED','Números duplicados.',422);if(body.fixedNumbers.some(n=>body.excludedNumbers.includes(n)))throw new AppError('VALIDATION_FAILED','fixedNumbers e excludedNumbers devem ser disjuntos.',422);const pool=UNIVERSE.filter(n=>!body.excludedNumbers.includes(n));const feasible=filters.checkFeasibility({size:body.numbersPerGame,pool,fixed:body.fixedNumbers,filters:body.filters});if(!feasible.feasible)throw new InfeasibleFiltersError(feasible.violations);const outcome=uniqueGames(body.quantity,body.numbersPerGame,pool,body.fixedNumbers,body.filters,body.budget);if(!outcome.games.length)throw new AppError('FILTERS_TOO_RESTRICTIVE','Orçamento esgotado sem gerar jogos.',422,{rejectionsByConstraint:outcome.rejectionsByConstraint});const requestId=String(req.headers['x-request-id']);const cost=costFor(body.numbersPerGame);return res.status(outcome.partial?206:200).json({status:'success',meta:{requestId,generatedQuantity:outcome.games.length,partial:outcome.partial,attempts:outcome.attempts,acceptanceRate:outcome.acceptanceRate,rejectionsByConstraint:outcome.rejectionsByConstraint},data:outcome.games.map(g=>({game:g,metrics:metrics(g)})),cost,expectedRateioGainCents:rateio*body.quantity,disclaimer,responsibleGamblingUrl:env.RESPONSIBLE_GAMBLING_URL});}catch(e){next(e);}});
-gameRoutes.get('/filters',(_req,res)=>res.set('Cache-Control','public, max-age=86400').json({data:[{key:'sum',label:'Soma das dezenas',domain:{min:120,max:270},expected:195,stdDev:18.03,suggested:{min:170,max:220},aPrioriCoverage:.836,nature:'statistical',note:'Probabilidade combinatória, não padrão histórico.'},{key:'fibonacci',label:'Dezenas de Fibonacci',domain:{min:0,max:7},expected:4.2,nature:'cosmetic',deprecationHint:'Subconjunto arbitrário, sem propriedade estatística distintiva.'},{key:'maxPopularityScore',label:'Evitar padrões populares',domain:{min:0,max:1},nature:'behavioural',confidence:'heuristic',note:'Pode reduzir rateio, sem alterar probabilidade.'}]}));
-gameRoutes.get('/patterns',(_req,res)=>res.set('Cache-Control','public, max-age=86400').json({modelVersion:env.POPULARITY_MODEL_VERSION,confidence:'heuristic',note:'Pesos modelam comportamento de apostadores, não o sorteio; não foram validados empiricamente.',aggregation:'max-within-group, independent-across-groups',estimatedGain:{basis:'Delta otimista de prêmios pari-mutuel',perBetCents:17,percentOfBetCost:.049},data:[['LONG_CONSECUTIVE_RUN','geometric',.45,'Sequências'],['FULL_ROW','geometric',.4,'Saliência visual'],['FULL_COLUMN','geometric',.4,'Saliência visual'],['FULL_DIAGONAL','geometric',.35,'Saliência visual'],['HALF_PLAYSLIP','geometric',.4,'Metade do volante'],['MULTIPLES_OF_FIVE','arithmetic',.25,'Progressão trivial'],['MIRRORED_AROUND_13','arithmetic',.2,'Espelhamento'],['CALENDAR_HEAVY','calendar',.3,'Datas'],['EXTREME_PRIME_COUNT','compositional',.1,'Extremos']].map(([key,group,weight,rationale])=>({key,group,weight,rationale}))}));
-gameRoutes.post('/validate',(req,res,next)=>{try{const body=z.object({game}).strict().parse(req.body);const normalized=[...body.game].sort((a,b)=>a-b);const m=metrics(normalized);return res.json({status:'success',data:{isValid:true,normalizedGame:normalized,totalNumbers:normalized.length,equivalentSimpleBets:simpleBetCount(normalized.length,15),cost:{...costFor(normalized.length),priceTableVersion:priceTable.version},metrics:m,warnings:[...(m.popularity.score>.5?[{code:'HIGH_POPULARITY',detail:'Padrão possivelmente popular; não altera a probabilidade.'}]:[]),...(m.sum<170||m.sum>220?[{code:'SUM_OUTSIDE_TYPICAL_RANGE',detail:`Soma ${m.sum} fora de 170–220.`}]:[])]}});}catch(e){next(e);}});
-gameRoutes.post('/analyze',(req,res,next)=>{try{const body=z.object({games:z.array(game).min(1).max(500),page:z.number().int().min(1).default(1),pageSize:z.number().int().min(1).max(100).default(100)}).parse(req.body);const start=(body.page-1)*body.pageSize;const page=body.games.slice(start,start+body.pageSize);const ms=body.games.map(metrics);const mean=(xs:number[])=>xs.reduce((a,b)=>a+b,0)/Math.max(1,xs.length);return res.json({data:page.map(g=>({game:g,metrics:metrics(g)})),aggregate:{meanSum:mean(ms.map(m=>m.sum)),stdDevSum:Math.sqrt(mean(ms.map(m=>(m.sum-mean(ms.map(x=>x.sum)))**2))),meanPopularity:mean(ms.map(m=>m.popularity.score))},diversity:diversity.analyze(body.games),pagination:{page:body.page,pageSize:body.pageSize,totalGames:body.games.length}});}catch(e){next(e);}});
-gameRoutes.post('/expand',(req,res,next)=>{try{const body=z.object({numbers:z.array(dozen).min(16).max(20).refine(a=>new Set(a).size===a.length,'Duplicated numbers.'),format:z.enum(['json','ndjson']).default('ndjson')}).strict().parse(req.body);const total=simpleBetCount(body.numbers.length,15);if(body.format==='json'&&total>1000)throw new AppError('UNSUPPORTED_RESPONSE_SIZE','Use NDJSON para expansões acima de 1.000 combinações.',406);const combos=[...expand([...body.numbers].sort((a,b)=>a-b),15)];if(body.format==='ndjson'){res.type('application/x-ndjson');res.write(JSON.stringify({meta:{total,format:'ndjson'}})+'\n');for(const c of combos)res.write(JSON.stringify({game:c})+'\n');return res.end();}return res.json({meta:{total},data:combos});}catch(e){next(e);}});
-gameRoutes.post('/check',(req,res,next)=>{try{const body=z.object({drawnNumbers:z.array(dozen).length(15),games:z.array(game).min(1).max(500)}).parse(req.body);const drawn=new Set(body.drawnNumbers);const rows=body.games.map(g=>{const hits=g.filter(n=>drawn.has(n)).length;const tier=hits>=15?'FIFTEEN':hits===14?'FOURTEEN':hits===13?'THIRTEEN':hits===12?'TWELVE':hits===11?'ELEVEN':'NONE';return {game:g,hits,tier,fixedPrizeCents:hits>=11&&hits<=13?priceTable.fixedPrizeCents[hits as 11|12|13]:null,note:hits>=14?'Faixa pari-mutuel: valor depende do rateio do concurso.':undefined};});const byTier=Object.fromEntries(['15','14','13','12','11','none'].map(k=>[k,rows.filter(r=>r.tier===({'15':'FIFTEEN','14':'FOURTEEN','13':'THIRTEEN','12':'TWELVE','11':'ELEVEN','none':'NONE'} as Record<string,string>)[k]).length]));return res.json({data:rows,summary:{totalGames:rows.length,byTier,fixedPrizeTotalCents:rows.reduce((s,r)=>s+(r.fixedPrizeCents??0),0)}});}catch(e){next(e);}});
-export const toolRoutes=Router();
-toolRoutes.post('/expected-value',(req,res,next)=>{try{const b=z.object({games:z.array(game).min(1).max(500),rateioAssumptions:z.object({jackpotCents:z.number().int().nonnegative(),expectedWinners15:z.number().positive(),expectedWinners14:z.number().positive(),prize14Cents:z.number().int().nonnegative()}).optional()}).parse(req.body);const result=new ExpectedValueCalculator().calculate(b.games as number[][],b.rateioAssumptions);return res.json({...result,disclaimer:'O retorno esperado é negativo. Aposte apenas o que puder perder.'});}catch(e){next(e);}});
-toolRoutes.post('/bankroll-check',(req,res,next)=>{try{const b=z.object({monthlyBudgetCents:z.number().int().positive(),betCostCents:z.number().int().positive().default(350),horizonMonths:z.number().int().min(1).max(120)}).parse(req.body);const bets=Math.floor(b.monthlyBudgetCents/b.betCostCents);const total=bets*b.betCostCents*b.horizonMonths;const expected=Math.round(total*.451);return res.json({monthlyBets:bets,totalSpentCents:total,expectedReturnCents:expected,expectedLossCents:total-expected,horizonMonths:b.horizonMonths,note:'Saída informacional; não constitui recomendação.'});}catch(e){next(e);}});
-toolRoutes.post('/backtest',(req,res,next)=>{try{const b=z.object({historicDraws:z.array(z.array(dozen).length(15)).min(1),strategy:z.object({games:z.array(game).min(1)}).optional()}).parse(req.body);const games=b.strategy?.games??[generator.draw(15,UNIVERSE)];const dist:Record<string,number>={'11':0,'12':0,'13':0,'14':0,'15':0};for(const draw of b.historicDraws){const d=new Set(draw);const best=Math.max(...games.map(g=>g.filter(n=>d.has(n)).length));for(const k of [11,12,13,14,15])if(best===k)dist[String(k)]++;}return res.json({results:{hitDistribution:dist,draws:b.historicDraws.length},baseline:{expected11:b.historicDraws.length*.0877,expected12:b.historicDraws.length*.0167,expected13:b.historicDraws.length*.00145,expected14:b.historicDraws.length*.0000459,expected15:b.historicDraws.length*.000000306},statisticalPower:{drawsAnalysed:b.historicDraws.length,drawsRequiredToDetect15HitDifference:3268760,conclusion:'INSUFFICIENT_POWER',note:'Amostra insuficiente para distinguir diferenças nas faixas raras.'}});}catch(e){next(e);}});
+import { Router } from "express";
+import { z } from "zod";
+import {
+  UNIVERSE,
+  MIN_GAME_SIZE,
+  MAX_GAME_SIZE,
+  simpleBetCount,
+} from "../../../domain/games/constants.js";
+import { CryptoRandomSource } from "../../random/CryptoRandomSource.js";
+import { GameGenerator } from "../../../domain/games/services/GameGenerator.js";
+import { GameAnalyzer } from "../../../domain/games/services/GameAnalyzer.js";
+import { FilterEngine } from "../../../domain/games/services/FilterEngine.js";
+import { DiversityAnalyzer } from "../../../domain/games/services/DiversityAnalyzer.js";
+import { expand } from "../../../domain/games/services/CombinationExpander.js";
+import { ExpectedValueCalculator } from "../../../domain/games/services/ExpectedValueCalculator.js";
+import { costFor, priceTable } from "../../pricing/StaticPriceTable.js";
+import {
+  AppError,
+  InfeasibleFiltersError,
+} from "../../../shared/errors/AppError.js";
+import { env } from "../../../shared/config/env.js";
+import { loadResults } from "../../data/results.js";
+import { sendGamesExport, type ExportFormat } from "./format.js";
+const range = z
+  .object({
+    min: z.number().int().optional(),
+    max: z.number().int().optional(),
+  })
+  .refine(
+    (r) => r.min === undefined || r.max === undefined || r.min <= r.max,
+    "min must not exceed max",
+  );
+const dozen = z.number().int().min(1).max(25);
+const uniqueNumbers = (message = "Duplicated numbers.") =>
+  z.array(dozen).refine((a) => new Set(a).size === a.length, message);
+const game = uniqueNumbers().min(15).max(20);
+const filtersSchema = z.object({
+  evens: range.optional(),
+  primes: range.optional(),
+  fibonacci: range.optional(),
+  sum: range.optional(),
+  frame: range.optional(),
+  maxConsecutiveRun: z.number().int().min(2).max(15).optional(),
+  maxPopularityScore: z.number().min(0).max(1).optional(),
+  maxOverlapWithBatch: z.number().int().min(5).max(20).optional(),
+  repeatsFromPrevious: z
+    .object({
+      previousDraw: z.array(dozen).length(15),
+      min: z.number().int().min(0).max(15).optional(),
+      max: z.number().int().min(0).max(15).optional(),
+    })
+    .optional(),
+});
+type FilterSpec = z.infer<typeof filtersSchema>;
+const generator = new GameGenerator(new CryptoRandomSource());
+const analyzer = new GameAnalyzer();
+const filters = new FilterEngine();
+const diversity = new DiversityAnalyzer();
+const fmt = (
+  requestId: string,
+  data: unknown,
+  extra: Record<string, unknown> = {},
+) => ({ status: "success", meta: { requestId, ...extra }, data });
+const disclaimer =
+  "Nenhuma combinação tem probabilidade superior a outra. Filtros, popularidade, fechamento e diversificação não aumentam a probabilidade de premiação.";
+const expectedRateioGainCents = Math.round(priceTable.betPriceCents * 0.049);
+const metrics = (g: number[]) => analyzer.analyze(g);
+type WeightedStrategy = "quentes" | "frias" | "overdue";
+function weightedValues(strategy: WeightedStrategy): Map<number, number> {
+  const results = loadResults().sort((a, b) => a.concurso - b.concurso);
+  const latestIndex = results.length - 1;
+  return new Map(
+    UNIVERSE.map((number) => {
+      const positions = results
+        .map((result, index) => (result.dezenas.includes(number) ? index : -1))
+        .filter((index) => index >= 0);
+      const frequency = positions.length;
+      const currentDelay = latestIndex - (positions.at(-1) ?? -1);
+      const weight = strategy === "quentes"
+        ? frequency + 1
+        : strategy === "frias"
+          ? 1 / (frequency + 1)
+          : currentDelay + 1;
+      return [number, weight];
+    }),
+  );
+}
+function uniqueGames(
+  quantity: number,
+  size: number,
+  pool: number[],
+  fixed: number[],
+  filter: FilterSpec,
+  budget: { maxAttemptsPerGame: number; maxTotalMs: number },
+) {
+  const out: number[][] = [];
+  const seen = new Set<string>();
+  const rejects: Record<string, number> = {};
+  let attempts = 0;
+  const started = Date.now();
+  const spec = filter;
+  const maxOverlapWithBatch = spec.maxOverlapWithBatch;
+  while (
+    out.length < quantity &&
+    attempts < quantity * budget.maxAttemptsPerGame &&
+    Date.now() - started < budget.maxTotalMs
+  ) {
+    attempts++;
+    const candidate = [
+      ...fixed,
+      ...generator.draw(
+        size - fixed.length,
+        pool.filter((n) => !fixed.includes(n)),
+      ),
+    ].sort((a, b) => a - b);
+    if (!filters.check(candidate, spec)) {
+      for (const k of [
+        "evens",
+        "primes",
+        "fibonacci",
+        "sum",
+        "frame",
+        "maxConsecutiveRun",
+        "repeatsFromPrevious",
+      ] as const) {
+        if (spec[k] !== undefined) rejects[k] = (rejects[k] ?? 0) + 1;
+      }
+      continue;
+    }
+    const m = metrics(candidate);
+    if (
+      spec.maxPopularityScore !== undefined &&
+      m.popularity.score > spec.maxPopularityScore
+    ) {
+      rejects.popularity = (rejects.popularity ?? 0) + 1;
+      continue;
+    }
+    if (
+      maxOverlapWithBatch !== undefined &&
+      out.some(
+        (g) =>
+          g.filter((n) => candidate.includes(n)).length > maxOverlapWithBatch,
+      )
+    ) {
+      rejects.overlap = (rejects.overlap ?? 0) + 1;
+      continue;
+    }
+    const key = candidate.join("-");
+    if (seen.has(key)) {
+      rejects.duplicate = (rejects.duplicate ?? 0) + 1;
+      continue;
+    }
+    seen.add(key);
+    out.push(candidate);
+  }
+  return {
+    games: out,
+    attempts,
+    partial: out.length < quantity,
+    acceptanceRate: attempts ? out.length / attempts : 0,
+    rejectionsByConstraint: rejects,
+  };
+}
+export const gameRoutes = Router();
+gameRoutes.post("/generate-random", (req, res, next) => {
+  try {
+    const format =
+      typeof req.query.format === "string"
+        ? z
+            .enum(["csv", "txt", "json", "ndjson", "sql"])
+            .parse(req.query.format)
+        : undefined;
+    const body = z
+      .object({
+        quantity: z.number().int().min(1).max(500).default(1),
+        numbersPerGame: z.number().int().min(15).max(20).default(15),
+        unique: z.boolean().default(true),
+      })
+      .strict()
+      .parse(req.body);
+    const games: number[][] = [];
+    const seen = new Set<string>();
+    while (games.length < body.quantity) {
+      const g = generator.draw(body.numbersPerGame, UNIVERSE);
+      if (!body.unique || !seen.has(g.join("-"))) {
+        seen.add(g.join("-"));
+        games.push(g);
+      }
+    }
+    const requestId = String(req.headers["x-request-id"]);
+    const cost = costFor(body.numbersPerGame);
+    if (format) return sendGamesExport(res, games, format as ExportFormat);
+    return res.json({
+      ...fmt(
+        requestId,
+        games.map((game) => ({ game })),
+        {
+          generatedQuantity: games.length,
+          numbersPerGame: body.numbersPerGame,
+          priceTableVersion: priceTable.version,
+        },
+      ),
+      cost,
+      expectedValue: {
+        fixedTiersCents: 90,
+        note: "Parcela determinística. Faixas 14 e 15 requerem premissas.",
+      },
+      disclaimer,
+      responsibleGamblingUrl: env.RESPONSIBLE_GAMBLING_URL,
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+gameRoutes.post("/generate/ponderado", (req, res, next) => {
+  try {
+    const body = z.object({
+      quantity: z.number().int().min(1).max(100).default(1),
+      numbersPerGame: z.number().int().min(15).max(20).default(15),
+      fixedNumbers: uniqueNumbers().max(20).default([]),
+      excludedNumbers: uniqueNumbers().max(10).default([]),
+      strategy: z.enum(["quentes", "frias", "overdue"]).default("overdue"),
+      filters: filtersSchema.default({}),
+    }).strict().parse(req.body);
+    if (body.fixedNumbers.length > body.numbersPerGame || body.fixedNumbers.some((n) => body.excludedNumbers.includes(n)))
+      throw new AppError("VALIDATION_FAILED", "Dezenas fixas e excluídas devem ser compatíveis com o tamanho do jogo.", 422);
+    const pool = UNIVERSE.filter((number) => !body.excludedNumbers.includes(number));
+    if (pool.length < body.numbersPerGame)
+      throw new AppError("VALIDATION_FAILED", "O conjunto disponível é menor que o tamanho do jogo.", 422);
+    const feasible = filters.checkFeasibility({ size: body.numbersPerGame, pool, fixed: body.fixedNumbers, filters: body.filters });
+    if (!feasible.feasible) throw new InfeasibleFiltersError(feasible.violations);
+    const weights = weightedValues(body.strategy);
+    const games: number[][] = [];
+    const seen = new Set<string>();
+    const freePool = pool.filter((number) => !body.fixedNumbers.includes(number));
+    for (let attempt = 0; games.length < body.quantity && attempt < body.quantity * 100; attempt += 1) {
+      const candidate = [...body.fixedNumbers, ...generator.weightedDraw(body.numbersPerGame - body.fixedNumbers.length, freePool, weights)].sort((a, b) => a - b);
+      if (!filters.check(candidate, body.filters)) continue;
+      if (body.filters.maxPopularityScore !== undefined && metrics(candidate).popularity.score > body.filters.maxPopularityScore) continue;
+      const key = candidate.join("-");
+      if (!seen.has(key)) { seen.add(key); games.push(candidate); }
+    }
+    const requestId = String(req.headers["x-request-id"]);
+    return res.status(games.length < body.quantity ? 206 : 200).json({
+      status: "success",
+      meta: { requestId, generatedQuantity: games.length, numbersPerGame: body.numbersPerGame, partial: games.length < body.quantity, strategy: body.strategy },
+      data: games.map((game) => ({ game, metrics: metrics(game) })),
+      cost: costFor(body.numbersPerGame),
+      expectedRateioGainCents: expectedRateioGainCents * games.length,
+      disclaimer,
+      responsibleGamblingUrl: env.RESPONSIBLE_GAMBLING_URL,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+gameRoutes.post("/generate-filtered", (req, res, next) => {
+  try {
+    const format =
+      typeof req.query.format === "string"
+        ? z
+            .enum(["csv", "txt", "json", "ndjson", "sql"])
+            .parse(req.query.format)
+        : undefined;
+    const body = z
+      .object({
+        quantity: z.number().int().min(1).max(100).default(1),
+        numbersPerGame: z.number().int().min(15).max(20).default(15),
+        fixedNumbers: z.array(dozen).max(20).default([]),
+        excludedNumbers: z.array(dozen).max(10).default([]),
+        filters: filtersSchema.default({}),
+        budget: z
+          .object({
+            maxAttemptsPerGame: z
+              .number()
+              .int()
+              .min(100)
+              .max(50000)
+              .default(5000),
+            maxTotalMs: z.number().int().min(50).max(5000).default(1000),
+          })
+          .default({ maxAttemptsPerGame: 5000, maxTotalMs: 1000 }),
+      })
+      .strict()
+      .parse(req.body);
+    if (
+      new Set(body.fixedNumbers).size !== body.fixedNumbers.length ||
+      new Set(body.excludedNumbers).size !== body.excludedNumbers.length
+    )
+      throw new AppError("VALIDATION_FAILED", "Números duplicados.", 422);
+    if (body.fixedNumbers.length > body.numbersPerGame)
+      throw new AppError(
+        "VALIDATION_FAILED",
+        "fixedNumbers não pode exceder numbersPerGame.",
+        422,
+      );
+    if (body.fixedNumbers.some((n) => body.excludedNumbers.includes(n)))
+      throw new AppError(
+        "VALIDATION_FAILED",
+        "fixedNumbers e excludedNumbers devem ser disjuntos.",
+        422,
+      );
+    const pool = UNIVERSE.filter((n) => !body.excludedNumbers.includes(n));
+    const feasible = filters.checkFeasibility({
+      size: body.numbersPerGame,
+      pool,
+      fixed: body.fixedNumbers,
+      filters: body.filters,
+    });
+    if (!feasible.feasible)
+      throw new InfeasibleFiltersError(feasible.violations);
+    const outcome = uniqueGames(
+      body.quantity,
+      body.numbersPerGame,
+      pool,
+      body.fixedNumbers,
+      body.filters,
+      body.budget,
+    );
+    if (!outcome.games.length)
+      throw new AppError(
+        "FILTERS_TOO_RESTRICTIVE",
+        "Orçamento esgotado sem gerar jogos.",
+        422,
+        { rejectionsByConstraint: outcome.rejectionsByConstraint },
+      );
+    const requestId = String(req.headers["x-request-id"]);
+    const cost = costFor(body.numbersPerGame);
+    if (format)
+      return sendGamesExport(res, outcome.games, format as ExportFormat);
+    return res.status(outcome.partial ? 206 : 200).json({
+      status: "success",
+      meta: {
+        requestId,
+        generatedQuantity: outcome.games.length,
+        numbersPerGame: body.numbersPerGame,
+        partial: outcome.partial,
+        attempts: outcome.attempts,
+        acceptanceRate: outcome.acceptanceRate,
+        rejectionsByConstraint: outcome.rejectionsByConstraint,
+      },
+      data: outcome.games.map((g) => ({ game: g, metrics: metrics(g) })),
+      cost,
+      expectedRateioGainCents: expectedRateioGainCents * outcome.games.length,
+      disclaimer,
+      responsibleGamblingUrl: env.RESPONSIBLE_GAMBLING_URL,
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+gameRoutes.get("/filters", (_req, res) =>
+  res.set("Cache-Control", "public, max-age=86400").json({
+    data: [
+      {
+        key: "sum",
+        label: "Soma das dezenas",
+        domain: { min: 120, max: 270 },
+        expected: 195,
+        stdDev: 18.03,
+        suggested: { min: 170, max: 220 },
+        aPrioriCoverage: 0.836,
+        nature: "statistical",
+        note: "Probabilidade combinatória, não padrão histórico.",
+      },
+      {
+        key: "fibonacci",
+        label: "Dezenas de Fibonacci",
+        domain: { min: 0, max: 7 },
+        expected: 4.2,
+        nature: "cosmetic",
+        deprecationHint:
+          "Subconjunto arbitrário, sem propriedade estatística distintiva.",
+      },
+      { key: "evens", label: "Quantidade de pares", domain: { min: 0, max: 15 }, nature: "statistical", note: "Descrição de composição; não prevê o próximo sorteio." },
+      { key: "primes", label: "Quantidade de primos", domain: { min: 0, max: 9 }, nature: "statistical", note: "Descrição histórica e combinatória." },
+      { key: "frame", label: "Quantidade na moldura", domain: { min: 0, max: 16 }, nature: "statistical", note: "Descrição espacial do volante; não altera probabilidades." },
+      { key: "maxConsecutiveRun", label: "Máxima sequência consecutiva", domain: { min: 2, max: 15 }, nature: "statistical", note: "Limita sequências consecutivas por jogo." },
+      { key: "repeatsFromPrevious", label: "Repetidas do concurso anterior", domain: { min: 0, max: 15 }, nature: "historical", note: "Usa o último concurso apenas como referência descritiva." },
+      {
+        key: "maxPopularityScore",
+        label: "Evitar padrões populares",
+        domain: { min: 0, max: 1 },
+        nature: "behavioural",
+        confidence: "heuristic",
+        note: "Pode reduzir rateio, sem alterar probabilidade.",
+      },
+    ],
+    disclaimer,
+  }),
+);
+gameRoutes.get("/patterns", (_req, res) =>
+  res.set("Cache-Control", "public, max-age=86400").json({
+    modelVersion: env.POPULARITY_MODEL_VERSION,
+    confidence: "heuristic",
+    note: "Pesos modelam comportamento de apostadores, não o sorteio; não foram validados empiricamente.",
+    aggregation: "max-within-group, independent-across-groups",
+    estimatedGain: {
+      basis: "Delta otimista de prêmios pari-mutuel",
+      perBetCents: 17,
+      percentOfBetCost: 0.049,
+    },
+    data: [
+      ["LONG_CONSECUTIVE_RUN", "geometric", 0.45, "Sequências"],
+      ["FULL_ROW", "geometric", 0.4, "Saliência visual"],
+      ["FULL_COLUMN", "geometric", 0.4, "Saliência visual"],
+      ["FULL_DIAGONAL", "geometric", 0.35, "Saliência visual"],
+      ["HALF_PLAYSLIP", "geometric", 0.4, "Metade do volante"],
+      ["MULTIPLES_OF_FIVE", "arithmetic", 0.25, "Progressão trivial"],
+      ["MIRRORED_AROUND_13", "arithmetic", 0.2, "Espelhamento"],
+      ["CALENDAR_HEAVY", "calendar", 0.3, "Datas"],
+      ["EXTREME_PRIME_COUNT", "compositional", 0.1, "Extremos"],
+    ].map(([key, group, weight, rationale]) => ({
+      key,
+      group,
+      weight,
+      rationale,
+    })),
+  }),
+);
+gameRoutes.post("/validate", (req, res, next) => {
+  try {
+    const body = z.object({ game }).strict().parse(req.body);
+    const normalized = [...body.game].sort((a, b) => a - b);
+    const m = metrics(normalized);
+    const columns = Array.from(
+      { length: 5 },
+      (_, index) =>
+        normalized.filter((number) => (number - 1) % 5 === index).length,
+    );
+    const multipliers = {
+      simpleBets: simpleBetCount(normalized.length, 15),
+      cost: costFor(normalized.length).totalCents,
+    };
+    return res.json({
+      status: "success",
+      data: {
+        isValid: true,
+        normalizedGame: normalized,
+        totalNumbers: normalized.length,
+        equivalentSimpleBets: simpleBetCount(normalized.length, 15),
+        distribuicaoColunas: columns,
+        multiplicadores: multipliers,
+        cost: {
+          ...costFor(normalized.length),
+          priceTableVersion: priceTable.version,
+        },
+        metrics: m,
+        warnings: [
+          ...(m.popularity.score > 0.5
+            ? [
+                {
+                  code: "HIGH_POPULARITY",
+                  detail:
+                    "Padrão possivelmente popular; não altera a probabilidade.",
+                },
+              ]
+            : []),
+          ...(m.sum < 170 || m.sum > 220
+            ? [
+                {
+                  code: "SUM_OUTSIDE_TYPICAL_RANGE",
+                  detail: `Soma ${m.sum} fora de 170–220.`,
+                },
+              ]
+            : []),
+        ],
+      },
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+gameRoutes.post("/analyze", (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        games: z.array(game).min(1).max(500),
+        page: z.number().int().min(1).default(1),
+        pageSize: z.number().int().min(1).max(100).default(100),
+      })
+      .parse(req.body);
+    const start = (body.page - 1) * body.pageSize;
+    const ms = body.games.map(metrics);
+    const page = ms.slice(start, start + body.pageSize);
+    const mean = (xs: number[]) =>
+      xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
+    const sums = ms.map((m) => m.sum);
+    const meanSum = mean(sums);
+    const stdDevSum = Math.sqrt(mean(sums.map((sum) => (sum - meanSum) ** 2)));
+    return res.json({
+      data: page.map((m, index) => ({
+        game: body.games[start + index],
+        metrics: m,
+      })),
+      aggregate: {
+        meanSum,
+        stdDevSum,
+        meanPopularity: mean(ms.map((m) => m.popularity.score)),
+      },
+      diversity: diversity.analyze(body.games),
+      pagination: {
+        page: body.page,
+        pageSize: body.pageSize,
+        totalGames: body.games.length,
+      },
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+gameRoutes.post("/expand", (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        numbers: z
+          .array(dozen)
+          .min(16)
+          .max(20)
+          .refine((a) => new Set(a).size === a.length, "Duplicated numbers."),
+        format: z.enum(["json", "ndjson"]).default("ndjson"),
+      })
+      .strict()
+      .parse(req.body);
+    const total = simpleBetCount(body.numbers.length, 15);
+    if (body.format === "json" && total > 1000)
+      throw new AppError(
+        "UNSUPPORTED_RESPONSE_SIZE",
+        "Use NDJSON para expansões acima de 1.000 combinações.",
+        406,
+      );
+    const combos = [
+      ...expand(
+        [...body.numbers].sort((a, b) => a - b),
+        15,
+      ),
+    ];
+    if (body.format === "ndjson") {
+      res.type("application/x-ndjson");
+      res.write(JSON.stringify({ meta: { total, format: "ndjson" } }) + "\n");
+      let index = 0;
+      const writeChunk = () => {
+        if (res.writableEnded) return;
+        const limit = Math.min(index + 2000, combos.length);
+        while (index < limit) {
+          res.write(JSON.stringify({ game: combos[index] }) + "\n");
+          index += 1;
+        }
+        if (index < combos.length) {
+          setImmediate(writeChunk);
+        } else {
+          res.end();
+        }
+      };
+      writeChunk();
+      return;
+    }
+    return res.json({ meta: { total }, data: combos });
+  } catch (e) {
+    next(e);
+  }
+});
+gameRoutes.post("/check", (req, res, next) => {
+  try {
+    const body = z
+      .object({
+        drawnNumbers: uniqueNumbers(
+          "drawnNumbers must contain 15 unique numbers.",
+        ).length(15),
+        games: z.array(game).min(1).max(500),
+      })
+      .parse(req.body);
+    const drawn = new Set(body.drawnNumbers);
+    const rows = body.games.map((g) => {
+      const hits = g.filter((n) => drawn.has(n)).length;
+      const tier =
+        hits >= 15
+          ? "FIFTEEN"
+          : hits === 14
+            ? "FOURTEEN"
+            : hits === 13
+              ? "THIRTEEN"
+              : hits === 12
+                ? "TWELVE"
+                : hits === 11
+                  ? "ELEVEN"
+                  : "NONE";
+      return {
+        game: g,
+        hits,
+        tier,
+        fixedPrizeCents:
+          hits >= 11 && hits <= 13
+            ? priceTable.fixedPrizeCents[hits as 11 | 12 | 13]
+            : null,
+        note:
+          hits >= 14
+            ? "Faixa pari-mutuel: valor depende do rateio do concurso."
+            : undefined,
+      };
+    });
+    const byTier = Object.fromEntries(
+      ["15", "14", "13", "12", "11", "none"].map((k) => [
+        k,
+        rows.filter(
+          (r) =>
+            r.tier ===
+            (
+              {
+                "15": "FIFTEEN",
+                "14": "FOURTEEN",
+                "13": "THIRTEEN",
+                "12": "TWELVE",
+                "11": "ELEVEN",
+                none: "NONE",
+              } as Record<string, string>
+            )[k],
+        ).length,
+      ]),
+    );
+    return res.json({
+      data: rows,
+      summary: {
+        totalGames: rows.length,
+        byTier,
+        fixedPrizeTotalCents: rows.reduce(
+          (s, r) => s + (r.fixedPrizeCents ?? 0),
+          0,
+        ),
+      },
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+gameRoutes.post("/generate/variations", (req, res, next) => {
+  try {
+    const b = z
+      .object({ game, count: z.number().int().min(1).max(100) })
+      .parse(req.body);
+    const variations: number[][] = [];
+    const seen = new Set<string>();
+    while (variations.length < b.count) {
+      const candidate = generator.draw(b.game.length, UNIVERSE);
+      const overlap = candidate.filter((n) => b.game.includes(n)).length;
+      if (overlap < Math.max(10, b.game.length - 3)) continue;
+      const key = candidate.join("-");
+      if (!seen.has(key) && key !== b.game.join("-")) {
+        seen.add(key);
+        variations.push(candidate);
+      }
+    }
+    return res.json({
+      data: variations.map((game) => ({ game, metrics: metrics(game) })),
+      baseGame: b.game,
+      disclaimer,
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+export const toolRoutes = Router();
+toolRoutes.post("/expected-value", (req, res, next) => {
+  try {
+    const b = z
+      .object({
+        games: z.array(game).min(1).max(500),
+        orcamento: z.number().int().positive().optional(),
+        rateioAssumptions: z
+          .object({
+            jackpotCents: z.number().int().nonnegative(),
+            expectedWinners15: z.number().positive(),
+            expectedWinners14: z.number().positive(),
+            prize14Cents: z.number().int().nonnegative(),
+          })
+          .optional(),
+      })
+      .parse(req.body);
+    const result = new ExpectedValueCalculator().calculate(
+      b.games as number[][],
+      b.rateioAssumptions,
+    );
+    const budget =
+      b.orcamento === undefined
+        ? undefined
+        : {
+            jogosPossiveis: Math.floor(b.orcamento / priceTable.betPriceCents),
+            custoTotal:
+              Math.floor(b.orcamento / priceTable.betPriceCents) *
+              priceTable.betPriceCents,
+            retornoEsperado: Math.round(
+              (result.total.expectedReturnCents *
+                Math.floor(b.orcamento / priceTable.betPriceCents)) /
+                Math.max(1, result.total.simpleBets),
+            ),
+            roiEstimado: Number(
+              (result.total.expectedReturnRatio - 1).toFixed(3),
+            ),
+          };
+    return res.json({
+      ...result,
+      ...(budget ? { budget } : {}),
+      disclaimer:
+        "O retorno esperado é negativo. Aposte apenas o que puder perder.",
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+toolRoutes.post("/bankroll-check", (req, res, next) => {
+  try {
+    const b = z
+      .object({
+        monthlyBudgetCents: z.number().int().positive().optional(),
+        orcamento: z.number().int().positive().optional(),
+        betCostCents: z.number().int().positive().default(350),
+        horizonMonths: z.number().int().min(1).max(120),
+      })
+      .parse(req.body);
+    const monthlyBudgetCents = b.monthlyBudgetCents ?? b.orcamento;
+    if (monthlyBudgetCents === undefined)
+      throw new AppError(
+        "VALIDATION_FAILED",
+        "Informe monthlyBudgetCents ou orcamento.",
+        422,
+      );
+    const bets = Math.floor(monthlyBudgetCents / b.betCostCents);
+    const total = bets * b.betCostCents * b.horizonMonths;
+    const expected = Math.round(total * 0.451);
+    return res.json({
+      monthlyBets: bets,
+      totalSpentCents: total,
+      expectedReturnCents: expected,
+      expectedLossCents: total - expected,
+      horizonMonths: b.horizonMonths,
+      note: "Saída informacional; não constitui recomendação.",
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+toolRoutes.post("/simulate-historical", (req, res, next) => {
+  try {
+    const b = z
+      .object({
+        dezenas: game,
+        concursoInicio: z.number().int().positive().optional(),
+        concursoFim: z.number().int().positive().optional(),
+      })
+      .parse(req.body);
+    const rows = loadResults().filter(
+      (row) =>
+        (b.concursoInicio === undefined || row.concurso >= b.concursoInicio) &&
+        (b.concursoFim === undefined || row.concurso <= b.concursoFim),
+    );
+    const hits = Object.fromEntries(
+      ["11", "12", "13", "14", "15"].map((key) => [key, 0]),
+    );
+    let maiorAcerto = 0;
+    let totalHits = 0;
+    for (const row of rows) {
+      const count = row.dezenas.filter((number) =>
+        b.dezenas.includes(number),
+      ).length;
+      maiorAcerto = Math.max(maiorAcerto, count);
+      totalHits += count;
+      for (const tier of [11, 12, 13, 14, 15])
+        if (count === tier) hits[String(tier)]++;
+    }
+    const cost = costFor(b.dezenas.length).totalCents;
+    return res.json({
+      totalConcursos: rows.length,
+      acertosPorFaixa: hits,
+      maiorAcerto,
+      premioPotencialTotal:
+        (hits["11"] ?? 0) * priceTable.fixedPrizeCents[11] +
+        (hits["12"] ?? 0) * priceTable.fixedPrizeCents[12] +
+        (hits["13"] ?? 0) * priceTable.fixedPrizeCents[13],
+      mediaAcertos: rows.length ? totalHits / rows.length : 0,
+      custoTotal: cost,
+      disclaimer,
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+toolRoutes.post("/backtest", (req, res, next) => {
+  try {
+    const b = z
+      .object({
+        historicDraws: z.array(z.array(dozen).length(15)).min(1),
+        strategy: z.object({ games: z.array(game).min(1) }).optional(),
+      })
+      .parse(req.body);
+    const games = b.strategy?.games ?? [generator.draw(15, UNIVERSE)];
+    const dist: Record<string, number> = {
+      "11": 0,
+      "12": 0,
+      "13": 0,
+      "14": 0,
+      "15": 0,
+    };
+    for (const draw of b.historicDraws) {
+      const d = new Set(draw);
+      const best = Math.max(
+        ...games.map((g) => g.filter((n) => d.has(n)).length),
+      );
+      for (const k of [11, 12, 13, 14, 15]) if (best === k) dist[String(k)]++;
+    }
+    return res.json({
+      results: { hitDistribution: dist, draws: b.historicDraws.length },
+      baseline: {
+        expected11: b.historicDraws.length * 0.0877,
+        expected12: b.historicDraws.length * 0.0167,
+        expected13: b.historicDraws.length * 0.00145,
+        expected14: b.historicDraws.length * 0.0000459,
+        expected15: b.historicDraws.length * 0.000000306,
+      },
+      statisticalPower: {
+        drawsAnalysed: b.historicDraws.length,
+        drawsRequiredToDetect15HitDifference: 3268760,
+        conclusion: "INSUFFICIENT_POWER",
+        note: "Amostra insuficiente para distinguir diferenças nas faixas raras.",
+      },
+    });
+  } catch (e) {
+    next(e);
+  }
+});

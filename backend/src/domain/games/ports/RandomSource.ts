@@ -1,1 +1,3 @@
-export interface RandomSource { nextInt(min: number, maxExclusive: number): number }
+export interface RandomSource {
+  nextInt(min: number, maxExclusive: number): number;
+}

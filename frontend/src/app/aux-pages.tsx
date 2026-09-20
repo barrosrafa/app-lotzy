@@ -1,12 +1,377 @@
 'use client';
-import { useState } from 'react';
-import { analyzeGames, bankrollCheck, checkGames, validateGame } from '@/lib/api';
-import { PlayslipGrid } from '@/components/PlayslipGrid';
 
-export function ValidatePage() { const [game, setGame] = useState<number[]>([]); const [result, setResult] = useState<unknown>(); return <PageShell eyebrow="Validar volante" title="Uma combinação, com contexto." intro="Confirme tamanho, métricas e avisos sem transformar uma nota estatística em erro."><PlayslipGrid onChange={setGame} /><button className="btn btn-primary" style={{marginTop:18}} onClick={async()=>setResult(await validateGame(game))}>Validar esta combinação</button>{result !== undefined && <pre className="paper-card" style={{whiteSpace:'pre-wrap',marginTop:18}}>{JSON.stringify(result,null,2)}</pre>}</PageShell>; }
-export function AnalyzePage() { const [text,setText]=useState('1,2,3,4,5,6,7,8,9,10,11,12,13,14,15'); const [result,setResult]=useState<unknown>(); return <PageShell eyebrow="Analisar lote" title="Veja a distribuição das suas combinações." intro="O painel mostra cobertura e sobreposição do lote. Não compara com uma distribuição histórica."><textarea value={text} onChange={e=>setText(e.target.value)} rows={6} style={{width:'100%',padding:14,borderRadius:12,border:'1px solid var(--line)',background:'var(--paper)',color:'var(--graphite)'}} /><button className="btn btn-primary" style={{marginTop:18}} onClick={async()=>{const game=text.split(',').map(Number).filter(Boolean);setResult(await analyzeGames([game]));}}>Analisar lote</button>{result !== undefined && <pre className="paper-card" style={{whiteSpace:'pre-wrap',marginTop:18,overflow:'auto'}}>{JSON.stringify(result,null,2)}</pre>}</PageShell>; }
-export function CheckPage() { const [drawn,setDrawn]=useState('1,2,3,4,5,6,7,8,9,10,11,12,13,14,15'); const [result,setResult]=useState<unknown>(); return <PageShell eyebrow="Conferir" title="Confira sem inventar premiação." intro="As faixas 14 e 15 são pari-mutuel: o valor depende do rateio do concurso e não será fabricado pela interface."><input value={drawn} onChange={e=>setDrawn(e.target.value)} style={{width:'100%'}} /><button className="btn btn-primary" style={{marginTop:18}} onClick={async()=>{const nums=drawn.split(',').map(Number).filter(Boolean);setResult(await checkGames(nums,[nums]));}}>Conferir jogo</button>{result !== undefined && <pre className="paper-card" style={{whiteSpace:'pre-wrap',marginTop:18}}>{JSON.stringify(result,null,2)}</pre>}</PageShell>; }
-export function FiltersPage() { return <PageShell eyebrow="Filtros" title="Critérios vêm do catálogo da API." intro="A interface não chama nenhuma faixa de 'ideal'. O backend fornece a natureza, a nota e as ressalvas de cada filtro. A próxima etapa é carregar o catálogo em tempo real."><div className="paper-card"><h2>Diagnóstico honesto</h2><p>Quando a API devolver 206, o resultado parcial será tratado como sucesso com ressalva. Em 422, a interface deve mostrar a faixa alcançável, não apenas uma mensagem genérica.</p><span className="status">Sem promessa de padrão vencedor</span></div></PageShell>; }
-export function ToolsPage() { const [budget,setBudget]=useState(100); const [months,setMonths]=useState(6); const [result,setResult]=useState<unknown>(); return <PageShell eyebrow="Ferramentas" title="Planeje o limite, não o prêmio." intro="Projeções informacionais ajudam a visualizar orçamento e perda esperada. Elas não constituem recomendação."><div className="controls"><label>Orçamento mensal (R$)<input type="number" value={budget} onChange={e=>setBudget(Number(e.target.value))}/></label><label>Horizonte (meses)<input type="number" value={months} onChange={e=>setMonths(Number(e.target.value))}/></label><button className="btn btn-primary" onClick={async()=>setResult(await bankrollCheck(budget*100,months))}>Calcular projeção</button></div>{result !== undefined && <pre className="paper-card" style={{whiteSpace:'pre-wrap'}}>{JSON.stringify(result,null,2)}</pre>}</PageShell>; }
-export function WalletPage() { return <PageShell eyebrow="Carteira local" title="Seus jogos ficam no navegador." intro="A carteira usa armazenamento local versionado. Nada é enviado a terceiros; exportação e limpeza ficam sob seu controle."><div className="paper-card"><h2>Carteira v1</h2><p>A estrutura está preparada para persistir jogos validados com schema e descartar dados corrompidos com aviso.</p><button className="btn btn-secondary">Importar JSON</button> <button className="btn btn-danger">Limpar carteira</button></div></PageShell>; }
-function PageShell({eyebrow,title,intro,children}:{eyebrow:string;title:string;intro:string;children:React.ReactNode}) { return <main className="main"><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{intro}</p><div style={{marginTop:30}}>{children}</div></main>; }
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import {
+  analyzeGames,
+  formatMoney,
+  generateFiltered,
+  generateWeighted,
+  getDelays,
+  getFilters,
+  getLatestConcurso,
+  getTemperature,
+  parseNumbers,
+  useSimular,
+  validateAndAnalyzeBatch,
+  type FilterCatalog,
+  type GeneratedResponse,
+  type StatsDelay,
+  type StatsTemperature,
+  type WeightedStrategy,
+} from '@/lib/api';
+import { saveValidatedGamesToLocalStorage } from '@/lib/localGames';
+
+type AnalysisPayload = {
+  batch: GeneratedResponse;
+  analysis: Awaited<ReturnType<typeof analyzeGames>>;
+};
+
+function payloadGames(payload: AnalysisPayload): number[][] {
+  return payload.analysis?.data?.map((entry) => entry.game) ?? payload.batch.data.map((entry) => entry.game);
+}
+
+export function FiltersPage() {
+  const router = useRouter();
+  const [catalog, setCatalog] = useState<FilterCatalog>();
+  const [quantity, setQuantity] = useState(5);
+  const [numbersPerGame, setNumbersPerGame] = useState(15);
+  const [fixed, setFixed] = useState('');
+  const [excluded, setExcluded] = useState('');
+  const [sumMin, setSumMin] = useState('');
+  const [sumMax, setSumMax] = useState('');
+  const [evensMin, setEvensMin] = useState('');
+  const [evensMax, setEvensMax] = useState('');
+  const [primesMin, setPrimesMin] = useState('');
+  const [primesMax, setPrimesMax] = useState('');
+  const [frameMin, setFrameMin] = useState('');
+  const [frameMax, setFrameMax] = useState('');
+  const [maxConsecutiveRun, setMaxConsecutiveRun] = useState('');
+  const [repeatsMin, setRepeatsMin] = useState('');
+  const [repeatsMax, setRepeatsMax] = useState('');
+  const [strategy, setStrategy] = useState<'none' | WeightedStrategy>('none');
+  const [previousDraw, setPreviousDraw] = useState<number[]>([]);
+  const [temperature, setTemperature] = useState<StatsTemperature>();
+  const [delays, setDelays] = useState<StatsDelay[]>([]);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [hasValidatedGames, setHasValidatedGames] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    Promise.all([getFilters(), getTemperature(10), getDelays(), getLatestConcurso()])
+      .then(([filtersResponse, temperatureResponse, delaysResponse, latestResponse]) => {
+        setCatalog(filtersResponse);
+        setTemperature(temperatureResponse);
+        setDelays(delaysResponse.data);
+        setPreviousDraw(latestResponse.concurso.dezenas);
+      })
+      .catch(reason => setError(reason instanceof Error ? reason.message : 'Não foi possível carregar os filtros.'));
+  }, []);
+
+  async function submit() {
+    setError('');
+    setMessage('');
+    setHasValidatedGames(false);
+    const fixedNumbers = parseNumbers(fixed);
+    const excludedNumbers = parseNumbers(excluded);
+    if (fixedNumbers.some(n => excludedNumbers.includes(n))) {
+      setError('Uma dezena não pode ser fixa e excluída ao mesmo tempo.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const range = (min: string, max: string) => min || max ? { ...(min ? { min: Number(min) } : {}), ...(max ? { max: Number(max) } : {}) } : undefined;
+      const filters = {
+        ...(range(sumMin, sumMax) ? { sum: range(sumMin, sumMax) } : {}),
+        ...(range(evensMin, evensMax) ? { evens: range(evensMin, evensMax) } : {}),
+        ...(range(primesMin, primesMax) ? { primes: range(primesMin, primesMax) } : {}),
+        ...(range(frameMin, frameMax) ? { frame: range(frameMin, frameMax) } : {}),
+        ...(maxConsecutiveRun ? { maxConsecutiveRun: Number(maxConsecutiveRun) } : {}),
+        ...(repeatsMin || repeatsMax ? { repeatsFromPrevious: { previousDraw, ...range(repeatsMin, repeatsMax) } } : {}),
+      };
+      const response = strategy === 'none'
+        ? await generateFiltered({ quantity, numbersPerGame, fixedNumbers, excludedNumbers, filters })
+        : await generateWeighted({ quantity, numbersPerGame, fixedNumbers, excludedNumbers, strategy, filters });
+      const validated = await validateAndAnalyzeBatch(response);
+      sessionStorage.setItem('lotzy:validated-games', JSON.stringify(validated));
+      setHasValidatedGames(true);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Não foi possível gerar com os filtros.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function saveGames() {
+    try {
+      const savedCount = saveValidatedGamesToLocalStorage();
+      setMessage(`${savedCount} ${savedCount === 1 ? 'jogo salvo' : 'jogos salvos'} em Meus jogos.`);
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : 'Não foi possível salvar o lote.');
+    }
+  }
+
+  return (
+    <PageShell
+      eyebrow="01 · Filtros"
+      title="Escolha as restrições."
+      intro="Ajuste somente os filtros oferecidos pela API. A natureza e as advertências de cada filtro vêm do catálogo, sem promessas históricas."
+    >
+      <div className="paper-card">
+        <div className="controls">
+          <label>
+            Quantidade
+            <input type="number" min={1} max={100} value={quantity} onChange={event => setQuantity(Math.min(100, Math.max(1, Number(event.target.value))))} />
+          </label>
+          <label>
+            Dezenas por jogo
+            <select value={numbersPerGame} onChange={event => setNumbersPerGame(Number(event.target.value))}>
+              {[15, 16, 17, 18, 19, 20].map(number => <option key={number}>{number}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="filter-grid">
+          <label>
+            Dezenas fixas
+            <input placeholder="Ex.: 1, 7, 13" value={fixed} onChange={event => setFixed(event.target.value)} />
+            <small>Serão incluídas em todos os jogos.</small>
+          </label>
+          <label>
+            Dezenas excluídas
+            <input placeholder="Ex.: 4, 9, 22" value={excluded} onChange={event => setExcluded(event.target.value)} />
+            <small>Não serão usadas na geração.</small>
+          </label>
+          <label>
+            Soma mínima
+            <input type="number" placeholder="Ex.: 170" value={sumMin} onChange={event => setSumMin(event.target.value)} />
+          </label>
+          <label>
+            Soma máxima
+            <input type="number" placeholder="Ex.: 220" value={sumMax} onChange={event => setSumMax(event.target.value)} />
+          </label>
+          <label>Pares mínimos<input type="number" min={0} max={15} value={evensMin} onChange={event => setEvensMin(event.target.value)} /></label>
+          <label>Pares máximos<input type="number" min={0} max={15} value={evensMax} onChange={event => setEvensMax(event.target.value)} /></label>
+          <label>Primos mínimos<input type="number" min={0} max={9} value={primesMin} onChange={event => setPrimesMin(event.target.value)} /></label>
+          <label>Primos máximos<input type="number" min={0} max={9} value={primesMax} onChange={event => setPrimesMax(event.target.value)} /></label>
+          <label>Moldura mínima<input type="number" min={0} max={16} value={frameMin} onChange={event => setFrameMin(event.target.value)} /></label>
+          <label>Moldura máxima<input type="number" min={0} max={16} value={frameMax} onChange={event => setFrameMax(event.target.value)} /></label>
+          <label>Máxima corrida consecutiva<input type="number" min={2} max={15} value={maxConsecutiveRun} onChange={event => setMaxConsecutiveRun(event.target.value)} /></label>
+          <label>Repetidas mínimas<input type="number" min={0} max={15} value={repeatsMin} onChange={event => setRepeatsMin(event.target.value)} /></label>
+          <label>Repetidas máximas<input type="number" min={0} max={15} value={repeatsMax} onChange={event => setRepeatsMax(event.target.value)} /></label>
+          <label>Geração ponderada<select value={strategy} onChange={event => setStrategy(event.target.value as 'none' | WeightedStrategy)}><option value="none">Desativada</option><option value="quentes">Mais frequentes</option><option value="frias">Menos frequentes</option><option value="overdue">Mais atrasadas</option></select><small>Altera a distribuição do lote, não a chance individual.</small></label>
+        </div>
+        <section className="paper-card" style={{ marginTop: 24 }}>
+          <div className="section-heading"><div><span className="eyebrow">Referência histórica</span><h2>Temperatura e atrasos</h2></div><span className="status">janela 10 concursos</span></div>
+          <div className="page-grid">
+            <div><h3>Temperatura</h3><div className="result-list">{temperature?.data.map(item => <div className="game-row" key={item.dezena}><span className="game-index">{String(item.dezena).padStart(2, '0')}</span><div style={{ flex: 1 }}><div style={{ height: 8, borderRadius: 99, background: 'var(--ink)', width: `${Math.max(3, item.percentual)}%` }} /></div><span className="status">{item.frequencia}x</span></div>)}</div></div>
+            <div><h3>Maiores atrasos atuais</h3><div className="result-list">{[...delays].sort((a, b) => b.atrasoAtual - a.atrasoAtual).slice(0, 10).map(item => <div className="game-row" key={item.dezena}><span className="game-index">Dezena {item.dezena}</span><span className="status">{item.atrasoAtual} concursos</span></div>)}</div></div>
+          </div>
+          <div className="disclaimer"><p>Nenhuma combinação tem probabilidade superior a outra. Filtros, popularidade, fechamento e diversificação não aumentam a probabilidade de premiação.</p></div>
+        </section>
+        {catalog?.data.map(item => (
+          <div className="catalog-row" key={item.key}>
+            <div><strong>{item.label}</strong><span className="tag">{item.nature}</span></div>
+            <p>{item.note ?? 'Disponível conforme o contrato da API.'}{item.deprecationHint ? ` ${item.deprecationHint}` : ''}</p>
+          </div>
+        ))}
+        {error && <div className="error" role="alert">{error}</div>}
+        {message && <div className="success" role="status">{message}</div>}
+        <div className="controls">
+          <button className="btn btn-primary" type="button" onClick={submit} disabled={loading}>
+            {loading ? 'Gerando…' : 'Gerar com filtros'}
+          </button>
+          {hasValidatedGames && (
+            <>
+              <button className="btn btn-primary" type="button" onClick={() => router.push('/analisar')}>
+                Analisar
+              </button>
+              <button className="btn btn-secondary" type="button" onClick={saveGames}>
+                Salvar (Meus jogos)
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </PageShell>
+  );
+}
+
+function downloadGames(games: number[][], format: 'csv' | 'txt' | 'json') {
+  const body = format === 'csv'
+    ? ['jogo,dezenas', ...games.map((game, index) => `${index + 1},"${game.join(' ')}"`)].join('\n')
+    : format === 'txt'
+      ? games.map(game => game.join(' ')).join('\n')
+      : JSON.stringify(games.map(game => ({ game })), null, 2);
+  const blob = new Blob([body], { type: format === 'json' ? 'application/json' : 'text/plain' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = `lotzy-jogos-${Date.now()}.${format}`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+function shareGames(games: number[][]) {
+  const text = `Meus jogos Lotzy\n${games.map((game, index) => `${index + 1}. ${game.join(' ')}`).join('\n')}`;
+  if (navigator.share) navigator.share({ title: 'Jogos Lotzy', text }).catch(() => undefined);
+  else window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
+}
+
+export function AnalyzePage() {
+  const [payload, setPayload] = useState<AnalysisPayload>();
+  const [isLoadingStorage, setIsLoadingStorage] = useState(true);
+  const { simular, data: simularResult, isLoading: isSimulando, error: simularError } = useSimular();
+
+  useEffect(() => {
+    const raw = sessionStorage.getItem('lotzy:validated-games');
+    if (raw) {
+      try {
+        setPayload(JSON.parse(raw));
+      } catch {
+        /* estado vazio */
+      }
+    }
+    setIsLoadingStorage(false);
+  }, []);
+
+  async function handleSimular() {
+    if (!payload?.analysis?.data) return;
+    const cartoes = payload.analysis.data.map((item) => item.game);
+    try {
+      await simular({ cartoes });
+    } catch {
+      /* erro gerenciado pelo hook */
+    }
+  }
+
+  return (
+    <PageShell
+      className="analyze-page"
+      eyebrow="03 · Analisar"
+      title="Leia o lote sem superestimar o acaso."
+      intro="A análise mostra métricas calculadas pela API e mantém o aviso de que filtros e popularidade não aumentam a probabilidade de premiação."
+    >
+      {isLoadingStorage ? (
+        <div className="history-skeleton" aria-busy="true">
+          <span style={{ height: 90 }} />
+          <span style={{ height: 200 }} />
+        </div>
+      ) : payload ? (
+        <>
+          <div className="analyze-screen">
+            <div className="stat-grid">
+              <div className="stat">
+                <span>Soma média</span>
+                <b>{payload.analysis.aggregate.meanSum.toFixed(1)}</b>
+              </div>
+              <div className="stat">
+                <span>Desvio da soma</span>
+                <b>{payload.analysis.aggregate.stdDevSum.toFixed(1)}</b>
+              </div>
+              <div className="stat">
+                <span>Popularidade média</span>
+                <b>{payload.analysis.aggregate.meanPopularity.toFixed(2)}</b>
+              </div>
+            </div>
+
+            <div className="paper-card" style={{ marginTop: 24 }}>
+              <div className="section-heading">
+                <h2>Jogos validados</h2>
+                <div className="controls" style={{ margin: 0 }}>
+                  <button className="btn btn-secondary" onClick={() => downloadGames(payloadGames(payload), 'csv')}>CSV</button>
+                  <button className="btn btn-secondary" onClick={() => downloadGames(payloadGames(payload), 'txt')}>TXT</button>
+                  <button className="btn btn-secondary" onClick={() => shareGames(payloadGames(payload))}>Compartilhar</button>
+                  <button className="btn btn-secondary" onClick={() => window.print()}>Imprimir</button>
+                  <button className="btn btn-primary" onClick={handleSimular} disabled={isSimulando} aria-busy={isSimulando}>
+                    {isSimulando ? 'Simulando…' : 'Simular no Histórico (ROI)'}
+                  </button>
+                </div>
+              </div>
+
+              {isSimulando && (
+                <div className="history-skeleton" style={{ margin: '16px 0' }} aria-busy="true">
+                  <span style={{ height: 60 }} />
+                </div>
+              )}
+
+              {simularError && <div className="error" role="alert">{simularError}</div>}
+
+              {simularResult && (
+                <div className="paper-card" style={{ background: 'var(--paper)', margin: '20px 0', border: '1px solid var(--line)' }}>
+                  <div className="section-heading">
+                    <div>
+                      <span className="eyebrow">Simulação Histórica Completa</span>
+                      <h3>Retorno Sobre Investimento (ROI)</h3>
+                    </div>
+                    <span className="status">{simularResult.data.totalConcursos} concursos analisados</span>
+                  </div>
+                  <div className="stat-grid" style={{ marginBottom: 16 }}>
+                    <div className="stat"><span>Custo total</span><b>{formatMoney(simularResult.data.custoTotalCents)}</b></div>
+                    <div className="stat"><span>Prêmio total estimado</span><b>{formatMoney(simularResult.data.premioTotalCents)}</b></div>
+                    <div className="stat"><span>ROI</span><b style={{ color: simularResult.data.roi >= 0 ? 'var(--seal)' : 'var(--strike)' }}>{simularResult.data.roiPercentual}</b></div>
+                  </div>
+                  <div className="stat-grid">
+                    <div className="stat"><span>Saldo líquido</span><b style={{ color: simularResult.data.saldoLiquidoCents >= 0 ? 'var(--seal)' : 'var(--strike)' }}>{formatMoney(simularResult.data.saldoLiquidoCents)}</b></div>
+                    <div className="stat"><span>Maior acerto</span><b>{simularResult.data.maiorAcerto} dezenas</b></div>
+                    <div className="stat"><span>Média de acertos</span><b>{simularResult.data.mediaAcertos} / cartão</b></div>
+                  </div>
+                  <div style={{ marginTop: 14 }}>
+                    <small style={{ color: 'var(--graphite-2)' }}>
+                      Acertos por faixa: 11 pts: {simularResult.data.acertosPorFaixa['11'] ?? 0}x · 12 pts: {simularResult.data.acertosPorFaixa['12'] ?? 0}x · 13 pts: {simularResult.data.acertosPorFaixa['13'] ?? 0}x · 14 pts: {simularResult.data.acertosPorFaixa['14'] ?? 0}x · 15 pts: {simularResult.data.acertosPorFaixa['15'] ?? 0}x
+                    </small>
+                  </div>
+                </div>
+              )}
+
+              <div className="result-list">
+                {payloadGames(payload).map((game, index) => (
+                  <div className="game-row" key={`${index}-${game.join('-')}`}>
+                    <span className="game-index">{String(index + 1).padStart(2, '0')}</span>
+                    <div className="mini-grid">
+                      {game.map((number) => <span className="mini-number" key={number}>{String(number).padStart(2, '0')}</span>)}
+                    </div>
+                    <span className="status">soma {payload.analysis.data[index]?.metrics.sum ?? game.reduce((sum, number) => sum + number, 0)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="disclaimer">
+              <p>{payload.batch.disclaimer}</p>
+            </div>
+          </div>
+
+          <section className="print-view" aria-label="Visualização de impressão">
+            <h1>Jogos Lotzy</h1>
+            <p>Folha para revisão pessoal. A impressão não registra aposta.</p>
+            <div className="print-grid">
+              {payloadGames(payload).map((game, index) => (
+                <article className="paper-card print-card" key={`${index}-${game.join('-')}`}>
+                  <h2>Jogo {index + 1}</h2>
+                  <div className="mini-grid">
+                    {game.map(number => <span className="mini-number" key={number}>{String(number).padStart(2, '0')}</span>)}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        </>
+      ) : (
+        <div className="empty">
+          <div>
+            <strong>Nenhum lote validado.</strong>
+            <p>Use o gerador para iniciar o fluxo.</p>
+          </div>
+        </div>
+      )}
+    </PageShell>
+  );
+}
+
+export function HelpPage() {
+  return <PageShell eyebrow="Ajuda" title="Como usar o Lotzy." intro="O app organiza combinações da Lotofácil com transparência. Ele não registra apostas, não prevê sorteios e não oferece garantia de acerto."><div className="page-grid"><article className="paper-card"><span className="eyebrow">Gerar</span><h2>Gere um lote</h2><p>Escolha a quantidade e o número de dezenas por jogo. Para controlar dezenas fixas, excluídas ou a faixa de soma, abra <strong>Filtros</strong>.</p></article><article className="paper-card"><span className="eyebrow">Validar</span><h2>Validação automática</h2><p>Todo lote gerado é validado automaticamente antes de aparecer na análise. As métricas descrevem as combinações e não alteram suas probabilidades.</p></article><article className="paper-card"><span className="eyebrow">Analisar</span><h2>Interprete métricas</h2><p>Veja soma média, dispersão, popularidade e diversidade. Essas medidas descrevem o lote; não alteram as probabilidades do sorteio.</p></article><article className="paper-card"><span className="eyebrow">Responsabilidade</span><h2>Use com limite</h2><p>Os jogos precisam ser registrados nos canais oficiais para terem validade. Aposte apenas o que puder perder.</p></article></div></PageShell>;
+}
+
+export function PageShell({ eyebrow, title, intro, children, className = '' }: { eyebrow: string; title: string; intro: string; children: React.ReactNode; className?: string }) {
+  return <main className={`main ${className}`.trim()}><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{intro}</p><div style={{ marginTop: 30 }}>{children}</div></main>;
+}
