@@ -4,14 +4,19 @@
   "private": true,
   "description": "API stateless de geração e análise combinatória para Lotofácil",
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "npm run build:api && npm run build:frontend",
     "start": "node dist/server.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src --max-warnings 0"
+    "lint": "eslint src --max-warnings 0",
+    "build:api": "tsc -p tsconfig.build.json",
+    "build:frontend": "npm --prefix frontend run build",
+    "dev:api": "tsx watch src/server.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",

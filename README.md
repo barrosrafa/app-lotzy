@@ -241,3 +241,42 @@ Os testes cobrem invariantes de tamanho, unicidade, ordenação, geração deter
 ## 8. Licença e escopo
 
 Este software é um gerador/analisador combinatório sem relação institucional com a Caixa Econômica Federal. Não integra a API da Caixa e não persiste histórico. Resultados oficiais devem ser informados pelo cliente em `drawnNumbers`/`historicDraws`. Consulte `SSD-lotofacil-api-2.md` para a especificação completa, fundamentos matemáticos, decisões arquiteturais e roadmap.
+
+
+## 9. Frontend Next.js — implementação do SSD
+
+O diretório `frontend/` contém uma aplicação Next.js 15 com App Router, React 19, TypeScript strict e Zod. A interface segue a direção visual do SSD: papel levemente esverdeado, grafite, azul de marcação, verde de dezena fixa e vermelho de exclusão. A paleta evita reproduzir a identidade oficial da Lotofácil. Os tokens vivem em `frontend/src/app/globals.css`, respondem ao tema escuro do sistema e respeitam `prefers-reduced-motion: reduce`.
+
+A tela raiz trata o resultado como o herói da experiência. Antes da geração, existe um estado de convite. Depois da resposta, o lote mostra quantidade, dezenas por jogo, custo total corrigido pelo adapter temporário do defeito D1 e o `disclaimer` retornado pela API. O dinheiro permanece em centavos até a formatação com `Intl.NumberFormat`.
+
+O componente `frontend/src/components/PlayslipGrid.tsx` implementa o volante 5×5. Cada célula é um botão dentro de uma grade semântica e expõe o estado em `aria-label`. O ciclo de interação é disponível, marcada, fixa, excluída e novamente disponível. A distinção não depende somente de cor: há mudança de borda, preenchimento, texto e rótulo acessível. Os alvos têm pelo menos 44 pixels.
+
+As rotas auxiliares são:
+
+- `/filtros`: estrutura preparada para renderizar o catálogo `GET /games/filters`, sem hard-code de “faixa ideal”.
+- `/validar`: envia um jogo para `POST /games/validate` e mantém avisos como notas não bloqueantes.
+- `/analisar`: envia lote para `POST /games/analyze`.
+- `/conferir`: envia resultado e jogos para `POST /games/check`, sem inventar valores para faixas pari-mutuel.
+- `/ferramentas`: usa `POST /tools/bankroll-check` como projeção informacional.
+- `/carteira`: documenta a carteira local versionada, com limpeza e importação como próximos pontos de persistência validada.
+
+`frontend/src/lib/api.ts` concentra o cliente HTTP. As chamadas acrescentam cabeçalhos de conteúdo, preservam o `X-Request-Id` em erros e validam a resposta principal de geração com Zod. O schema usa `passthrough` para tolerar campos adicionais da API. Respostas `206` devem ser tratadas como sucesso parcial. Caso a API passe a exigir segredo, ele nunca deve ser embutido no bundle; use Route Handler do Next como proxy.
+
+### Execução integrada
+
+```bash
+npm ci
+npm --prefix frontend install
+cp .env.example .env
+cp frontend/.env.local.example frontend/.env.local
+npm run build
+npm test
+npm run typecheck
+npm --prefix frontend run dev
+```
+
+A API fica em `http://localhost:3000` e o frontend em `http://localhost:3001`. O `.env` deve conter `CORS_ORIGINS=http://localhost:3001`. Para o teste integrado, abra `http://localhost:3001`, gere cinco jogos de quinze dezenas e confirme que o navegador recebe `POST /api/v1/games/generate-random`. O custo de um jogo devolvido pela API é multiplicado pela quantidade no adapter temporário e aparece como R$ 17,50 para cinco jogos de quinze dezenas. Esse adapter deve ser removido quando D1/D2 forem corrigidos no backend.
+
+O score de popularidade deve ser exposto como heurística de padrões humanos, nunca como previsão. O frontend não utiliza `expectedRateioGainCents` porque a especificação registra que o valor atual é constante e pode sugerir precisão falsa. Expansão deve usar NDJSON e indicador indeterminado; backtest, fechamento e carteira balanceada continuam fora de uma promessa completa até as limitações registradas no SSD serem resolvidas.
+
+Em produção, defina `NEXT_PUBLIC_API_URL` com HTTPS e `CORS_ORIGINS` com a origem exata do frontend. Não deixe CORS vazio, configure CSP sem `unsafe-inline` e revise rate limiting diante de múltiplas réplicas.
