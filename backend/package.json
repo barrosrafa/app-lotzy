@@ -15,7 +15,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --max-warnings 0",
     "build:api": "tsc -p tsconfig.build.json",
-    "build:frontend": "npm --prefix frontend run build",
+    "build:frontend": "npm --prefix ../frontend run build",
     "dev:api": "tsx watch src/server.ts"
   },
   "dependencies": {
