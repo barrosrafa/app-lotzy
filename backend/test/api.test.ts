@@ -24,6 +24,13 @@ describe('API',()=>{it('expõe health e request id',async()=>{const r=await requ
     expect(r.body.meta.acceptanceRate).toBeGreaterThanOrEqual(0);
     if (r.status === 206) expect(r.body.meta.partial).toBe(true);
   });
+  it('gera lote ponderado por atraso e preserva o disclaimer', async () => {
+    const r = await request(app).post('/api/v1/games/generate/ponderado').send({ quantity: 3, numbersPerGame: 15, strategy: 'overdue' });
+    expect(r.status).toBe(200);
+    expect(r.body.data).toHaveLength(3);
+    expect(r.body.data[0].game).toHaveLength(15);
+    expect(r.body.disclaimer).toBe('Nenhuma combinação tem probabilidade superior a outra. Filtros, popularidade, fechamento e diversificação não aumentam a probabilidade de premiação.');
+  });
   it('rejeita sorteio oficial com dezenas duplicadas', async () => {
     const r = await request(app).post('/api/v1/games/check').send({
       drawnNumbers: Array.from({ length: 15 }, () => 1), games: [Array.from({ length: 15 }, (_, i) => i + 1)],

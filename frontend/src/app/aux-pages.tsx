@@ -6,12 +6,19 @@ import {
   analyzeGames,
   formatMoney,
   generateFiltered,
+  generateWeighted,
+  getDelays,
   getFilters,
+  getLatestConcurso,
+  getTemperature,
   parseNumbers,
   useSimular,
   validateAndAnalyzeBatch,
   type FilterCatalog,
   type GeneratedResponse,
+  type StatsDelay,
+  type StatsTemperature,
+  type WeightedStrategy,
 } from '@/lib/api';
 import { saveValidatedGamesToLocalStorage } from '@/lib/localGames';
 
@@ -33,14 +40,32 @@ export function FiltersPage() {
   const [excluded, setExcluded] = useState('');
   const [sumMin, setSumMin] = useState('');
   const [sumMax, setSumMax] = useState('');
+  const [evensMin, setEvensMin] = useState('');
+  const [evensMax, setEvensMax] = useState('');
+  const [primesMin, setPrimesMin] = useState('');
+  const [primesMax, setPrimesMax] = useState('');
+  const [frameMin, setFrameMin] = useState('');
+  const [frameMax, setFrameMax] = useState('');
+  const [maxConsecutiveRun, setMaxConsecutiveRun] = useState('');
+  const [repeatsMin, setRepeatsMin] = useState('');
+  const [repeatsMax, setRepeatsMax] = useState('');
+  const [strategy, setStrategy] = useState<'none' | WeightedStrategy>('none');
+  const [previousDraw, setPreviousDraw] = useState<number[]>([]);
+  const [temperature, setTemperature] = useState<StatsTemperature>();
+  const [delays, setDelays] = useState<StatsDelay[]>([]);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [hasValidatedGames, setHasValidatedGames] = useState(false);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    getFilters()
-      .then(setCatalog)
+    Promise.all([getFilters(), getTemperature(10), getDelays(), getLatestConcurso()])
+      .then(([filtersResponse, temperatureResponse, delaysResponse, latestResponse]) => {
+        setCatalog(filtersResponse);
+        setTemperature(temperatureResponse);
+        setDelays(delaysResponse.data);
+        setPreviousDraw(latestResponse.concurso.dezenas);
+      })
       .catch(reason => setError(reason instanceof Error ? reason.message : 'Não foi possível carregar os filtros.'));
   }, []);
 
@@ -56,22 +81,18 @@ export function FiltersPage() {
     }
     setLoading(true);
     try {
-      const response = await generateFiltered({
-        quantity,
-        numbersPerGame,
-        fixedNumbers,
-        excludedNumbers,
-        filters: {
-          ...(sumMin || sumMax
-            ? {
-                sum: {
-                  ...(sumMin ? { min: Number(sumMin) } : {}),
-                  ...(sumMax ? { max: Number(sumMax) } : {}),
-                },
-              }
-            : {}),
-        },
-      });
+      const range = (min: string, max: string) => min || max ? { ...(min ? { min: Number(min) } : {}), ...(max ? { max: Number(max) } : {}) } : undefined;
+      const filters = {
+        ...(range(sumMin, sumMax) ? { sum: range(sumMin, sumMax) } : {}),
+        ...(range(evensMin, evensMax) ? { evens: range(evensMin, evensMax) } : {}),
+        ...(range(primesMin, primesMax) ? { primes: range(primesMin, primesMax) } : {}),
+        ...(range(frameMin, frameMax) ? { frame: range(frameMin, frameMax) } : {}),
+        ...(maxConsecutiveRun ? { maxConsecutiveRun: Number(maxConsecutiveRun) } : {}),
+        ...(repeatsMin || repeatsMax ? { repeatsFromPrevious: { previousDraw, ...range(repeatsMin, repeatsMax) } } : {}),
+      };
+      const response = strategy === 'none'
+        ? await generateFiltered({ quantity, numbersPerGame, fixedNumbers, excludedNumbers, filters })
+        : await generateWeighted({ quantity, numbersPerGame, fixedNumbers, excludedNumbers, strategy, filters });
       const validated = await validateAndAnalyzeBatch(response);
       sessionStorage.setItem('lotzy:validated-games', JSON.stringify(validated));
       setHasValidatedGames(true);
@@ -129,7 +150,25 @@ export function FiltersPage() {
             Soma máxima
             <input type="number" placeholder="Ex.: 220" value={sumMax} onChange={event => setSumMax(event.target.value)} />
           </label>
+          <label>Pares mínimos<input type="number" min={0} max={15} value={evensMin} onChange={event => setEvensMin(event.target.value)} /></label>
+          <label>Pares máximos<input type="number" min={0} max={15} value={evensMax} onChange={event => setEvensMax(event.target.value)} /></label>
+          <label>Primos mínimos<input type="number" min={0} max={9} value={primesMin} onChange={event => setPrimesMin(event.target.value)} /></label>
+          <label>Primos máximos<input type="number" min={0} max={9} value={primesMax} onChange={event => setPrimesMax(event.target.value)} /></label>
+          <label>Moldura mínima<input type="number" min={0} max={16} value={frameMin} onChange={event => setFrameMin(event.target.value)} /></label>
+          <label>Moldura máxima<input type="number" min={0} max={16} value={frameMax} onChange={event => setFrameMax(event.target.value)} /></label>
+          <label>Máxima corrida consecutiva<input type="number" min={2} max={15} value={maxConsecutiveRun} onChange={event => setMaxConsecutiveRun(event.target.value)} /></label>
+          <label>Repetidas mínimas<input type="number" min={0} max={15} value={repeatsMin} onChange={event => setRepeatsMin(event.target.value)} /></label>
+          <label>Repetidas máximas<input type="number" min={0} max={15} value={repeatsMax} onChange={event => setRepeatsMax(event.target.value)} /></label>
+          <label>Geração ponderada<select value={strategy} onChange={event => setStrategy(event.target.value as 'none' | WeightedStrategy)}><option value="none">Desativada</option><option value="quentes">Mais frequentes</option><option value="frias">Menos frequentes</option><option value="overdue">Mais atrasadas</option></select><small>Altera a distribuição do lote, não a chance individual.</small></label>
         </div>
+        <section className="paper-card" style={{ marginTop: 24 }}>
+          <div className="section-heading"><div><span className="eyebrow">Referência histórica</span><h2>Temperatura e atrasos</h2></div><span className="status">janela 10 concursos</span></div>
+          <div className="page-grid">
+            <div><h3>Temperatura</h3><div className="result-list">{temperature?.data.map(item => <div className="game-row" key={item.dezena}><span className="game-index">{String(item.dezena).padStart(2, '0')}</span><div style={{ flex: 1 }}><div style={{ height: 8, borderRadius: 99, background: 'var(--ink)', width: `${Math.max(3, item.percentual)}%` }} /></div><span className="status">{item.frequencia}x</span></div>)}</div></div>
+            <div><h3>Maiores atrasos atuais</h3><div className="result-list">{[...delays].sort((a, b) => b.atrasoAtual - a.atrasoAtual).slice(0, 10).map(item => <div className="game-row" key={item.dezena}><span className="game-index">Dezena {item.dezena}</span><span className="status">{item.atrasoAtual} concursos</span></div>)}</div></div>
+          </div>
+          <div className="disclaimer"><p>Nenhuma combinação tem probabilidade superior a outra. Filtros, popularidade, fechamento e diversificação não aumentam a probabilidade de premiação.</p></div>
+        </section>
         {catalog?.data.map(item => (
           <div className="catalog-row" key={item.key}>
             <div><strong>{item.label}</strong><span className="tag">{item.nature}</span></div>

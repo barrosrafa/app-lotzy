@@ -37,7 +37,7 @@ export type HistoryResponse = z.infer<typeof historyResponseSchema>;
 export type HistoryQuery = { dataInicio?: string; dataFim?: string; concurso?: string; page?: number; limit?: number; order?: 'asc' | 'desc' };
 export type Problem = { title?: string; detail?: string; type?: string; status?: number; requestId?: string; violations?: Array<{ constraint: string; achievable?: { min?: number; max?: number } }> };
 export type FilterCatalogItem = { key: string; label: string; domain: { min: number; max: number }; expected?: number; stdDev?: number; suggested?: { min: number; max: number }; nature: string; note?: string; deprecationHint?: string };
-export type FilterCatalog = { data: FilterCatalogItem[] };
+export type FilterCatalog = { data: FilterCatalogItem[]; disclaimer: string };
 export type FilteredRequest = { quantity: number; numbersPerGame: number; fixedNumbers: number[]; excludedNumbers: number[]; filters: Record<string, unknown> };
 export type StatsDelay = { dezena: number; frequenciaTotal: number; atrasoAtual: number; atrasoMedio: number; maiorAtraso: number; ultimoConcurso: number | null };
 export type StatsTemperature = { janela: number; concursos: number; data: Array<{ dezena: number; frequencia: number; percentual: number }>; disclaimer: string };
@@ -176,6 +176,11 @@ export async function generateRandom(quantity: number, numbersPerGame: number): 
 
 export async function generateFiltered(payload: FilteredRequest): Promise<GeneratedResponse> {
   return request('/games/generate-filtered', { method: 'POST', body: JSON.stringify(payload) }, generatedSchema);
+}
+
+export type WeightedStrategy = 'quentes' | 'frias' | 'overdue';
+export async function generateWeighted(payload: { quantity: number; numbersPerGame: number; fixedNumbers?: number[]; excludedNumbers?: number[]; strategy: WeightedStrategy; filters?: Record<string, unknown> }): Promise<GeneratedResponse> {
+  return request('/games/generate/ponderado', { method: 'POST', body: JSON.stringify(payload) }, generatedSchema);
 }
 
 export async function getFilters(): Promise<FilterCatalog> {

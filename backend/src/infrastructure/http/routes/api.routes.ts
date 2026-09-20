@@ -65,6 +65,26 @@ const disclaimer =
   "Nenhuma combinação tem probabilidade superior a outra. Filtros, popularidade, fechamento e diversificação não aumentam a probabilidade de premiação.";
 const expectedRateioGainCents = Math.round(priceTable.betPriceCents * 0.049);
 const metrics = (g: number[]) => analyzer.analyze(g);
+type WeightedStrategy = "quentes" | "frias" | "overdue";
+function weightedValues(strategy: WeightedStrategy): Map<number, number> {
+  const results = loadResults().sort((a, b) => a.concurso - b.concurso);
+  const latestIndex = results.length - 1;
+  return new Map(
+    UNIVERSE.map((number) => {
+      const positions = results
+        .map((result, index) => (result.dezenas.includes(number) ? index : -1))
+        .filter((index) => index >= 0);
+      const frequency = positions.length;
+      const currentDelay = latestIndex - (positions.at(-1) ?? -1);
+      const weight = strategy === "quentes"
+        ? frequency + 1
+        : strategy === "frias"
+          ? 1 / (frequency + 1)
+          : currentDelay + 1;
+      return [number, weight];
+    }),
+  );
+}
 function uniqueGames(
   quantity: number,
   size: number,
@@ -192,6 +212,48 @@ gameRoutes.post("/generate-random", (req, res, next) => {
     next(e);
   }
 });
+gameRoutes.post("/generate/ponderado", (req, res, next) => {
+  try {
+    const body = z.object({
+      quantity: z.number().int().min(1).max(100).default(1),
+      numbersPerGame: z.number().int().min(15).max(20).default(15),
+      fixedNumbers: uniqueNumbers().max(20).default([]),
+      excludedNumbers: uniqueNumbers().max(10).default([]),
+      strategy: z.enum(["quentes", "frias", "overdue"]).default("overdue"),
+      filters: filtersSchema.default({}),
+    }).strict().parse(req.body);
+    if (body.fixedNumbers.length > body.numbersPerGame || body.fixedNumbers.some((n) => body.excludedNumbers.includes(n)))
+      throw new AppError("VALIDATION_FAILED", "Dezenas fixas e excluídas devem ser compatíveis com o tamanho do jogo.", 422);
+    const pool = UNIVERSE.filter((number) => !body.excludedNumbers.includes(number));
+    if (pool.length < body.numbersPerGame)
+      throw new AppError("VALIDATION_FAILED", "O conjunto disponível é menor que o tamanho do jogo.", 422);
+    const feasible = filters.checkFeasibility({ size: body.numbersPerGame, pool, fixed: body.fixedNumbers, filters: body.filters });
+    if (!feasible.feasible) throw new InfeasibleFiltersError(feasible.violations);
+    const weights = weightedValues(body.strategy);
+    const games: number[][] = [];
+    const seen = new Set<string>();
+    const freePool = pool.filter((number) => !body.fixedNumbers.includes(number));
+    for (let attempt = 0; games.length < body.quantity && attempt < body.quantity * 100; attempt += 1) {
+      const candidate = [...body.fixedNumbers, ...generator.weightedDraw(body.numbersPerGame - body.fixedNumbers.length, freePool, weights)].sort((a, b) => a - b);
+      if (!filters.check(candidate, body.filters)) continue;
+      if (body.filters.maxPopularityScore !== undefined && metrics(candidate).popularity.score > body.filters.maxPopularityScore) continue;
+      const key = candidate.join("-");
+      if (!seen.has(key)) { seen.add(key); games.push(candidate); }
+    }
+    const requestId = String(req.headers["x-request-id"]);
+    return res.status(games.length < body.quantity ? 206 : 200).json({
+      status: "success",
+      meta: { requestId, generatedQuantity: games.length, numbersPerGame: body.numbersPerGame, partial: games.length < body.quantity, strategy: body.strategy },
+      data: games.map((game) => ({ game, metrics: metrics(game) })),
+      cost: costFor(body.numbersPerGame),
+      expectedRateioGainCents: expectedRateioGainCents * games.length,
+      disclaimer,
+      responsibleGamblingUrl: env.RESPONSIBLE_GAMBLING_URL,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 gameRoutes.post("/generate-filtered", (req, res, next) => {
   try {
     const format =
@@ -310,6 +372,11 @@ gameRoutes.get("/filters", (_req, res) =>
         deprecationHint:
           "Subconjunto arbitrário, sem propriedade estatística distintiva.",
       },
+      { key: "evens", label: "Quantidade de pares", domain: { min: 0, max: 15 }, nature: "statistical", note: "Descrição de composição; não prevê o próximo sorteio." },
+      { key: "primes", label: "Quantidade de primos", domain: { min: 0, max: 9 }, nature: "statistical", note: "Descrição histórica e combinatória." },
+      { key: "frame", label: "Quantidade na moldura", domain: { min: 0, max: 16 }, nature: "statistical", note: "Descrição espacial do volante; não altera probabilidades." },
+      { key: "maxConsecutiveRun", label: "Máxima sequência consecutiva", domain: { min: 2, max: 15 }, nature: "statistical", note: "Limita sequências consecutivas por jogo." },
+      { key: "repeatsFromPrevious", label: "Repetidas do concurso anterior", domain: { min: 0, max: 15 }, nature: "historical", note: "Usa o último concurso apenas como referência descritiva." },
       {
         key: "maxPopularityScore",
         label: "Evitar padrões populares",
@@ -319,6 +386,7 @@ gameRoutes.get("/filters", (_req, res) =>
         note: "Pode reduzir rateio, sem alterar probabilidade.",
       },
     ],
+    disclaimer,
   }),
 );
 gameRoutes.get("/patterns", (_req, res) =>
