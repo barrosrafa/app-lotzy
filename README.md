@@ -294,7 +294,7 @@ npm run build
 npm start
 ```
 
-O comando `npm run build` existente no `backend/package.json` compila a API e tenta executar o build do frontend com `npm --prefix frontend run build`. Para execução independente, os comandos acima são mais explícitos.
+O comando `npm run build` existente no `backend/package.json` compila a API e executa o build do frontend com `npm --prefix ../frontend run build`. Para execução independente, os comandos acima são mais explícitos.
 
 ## API HTTP
 
@@ -776,3 +776,98 @@ A API atual retorna o custo de um jogo em determinadas respostas de lote. O fron
 [4]: https://nextjs.org/docs "Documentação oficial do Next.js"
 [5]: https://vitest.dev/ "Documentação oficial do Vitest"
 [6]: https://www.gov.br/saude/pt-br/assuntos/saude-de-a-a-z/j/jogo-patologico "Informações do Ministério da Saúde sobre jogo patológico"
+
+
+## Atualização v3 — execução e contratos reforçados
+
+Esta versão consolida as melhorias técnicas do plano v3 no repositório `app-lotzy`. A aplicação permanece **stateless**: não mantém apostas, usuários ou resultados em banco durante a execução da API. O arquivo `db/resultados.json` é um artefato histórico local para análises futuras; ele não é usado para prever concursos e nenhuma funcionalidade altera a probabilidade matemática de uma combinação.
+
+### Principais melhorias implementadas
+
+| Área | Implementação | Efeito observável |
+|---|---|---|
+| Geração aleatória | `CryptoRandomSource` com `crypto.randomInt` e Fisher–Yates parcial | Amostragem sem `Math.random()` nem viés de módulo |
+| Viabilidade | `FilterEngine.checkFeasibility` calcula envelopes alcançáveis antes da geração | Filtros impossíveis terminam imediatamente com `422` e `violations` |
+| Orçamento | Geração filtrada limita tentativas por jogo e tempo total | Respostas parciais usam `206`, `partial` e `acceptanceRate` |
+| Conferência | `POST /api/v1/games/check` recebe `drawnNumbers` e jogos | Retorna acertos, faixas 11–15 e prêmios fixos em centavos |
+| Expansão | `POST /api/v1/games/expand` oferece `json` ou `ndjson` | Expansões grandes são transmitidas em linhas e cedem o event loop a cada 2.000 itens |
+| Valores monetários | `StaticPriceTable` mantém `betPriceCents`, prêmios e versão | Evita floats e hard-code espalhado nas rotas |
+| Erros | Respostas inválidas seguem `application/problem+json` | Erros incluem `type`, `status`, `instance`, `requestId` e parâmetros inválidos |
+| Correlação | Cada requisição recebe ou preserva `X-Request-Id` | O identificador aparece no header e nos metadados das respostas de negócio |
+| Contrato | OpenAPI 3.1 disponível em `/api/v1/openapi.json` | As rotas versionadas podem ser descobertas por clientes e ferramentas |
+| Frontend | Next.js com volante acessível, estados textuais e páginas de geração, conferência, validação e análise | Interface responsiva sem depender apenas de cor para comunicar estado |
+
+### Monorepo: comandos recomendados
+
+A raiz agora oferece scripts para o fluxo completo. Execute:
+
+```bash
+npm ci --prefix backend
+npm ci --prefix frontend
+npm test
+npm run typecheck
+npm run build
+```
+
+`npm run build` compila a API TypeScript e, em seguida, executa `next build` no frontend. O erro anterior em que o script procurava `backend/frontend/package.json` foi corrigido para apontar para `../frontend`.
+
+Para desenvolvimento, use dois terminais quando quiser trabalhar na API e na interface ao mesmo tempo:
+
+```bash
+# Terminal 1 — API, porta 3000
+npm run dev
+
+# Terminal 2 — Next.js, porta 3001
+npm run dev:frontend
+```
+
+Também é possível executar os comandos diretamente em cada pacote:
+
+```bash
+cd backend && npm run dev
+cd frontend && npm run dev
+```
+
+A API usa `http://localhost:3000` e o frontend usa `http://localhost:3001`. O cliente web aponta por padrão para `http://localhost:3000/api/v1`; para outra origem, configure `frontend/.env.local`:
+
+```env
+NEXT_PUBLIC_API_URL=http://localhost:3000/api/v1
+```
+
+### Respostas parciais e falha rápida
+
+A rota `POST /api/v1/games/generate-filtered` nunca deve permanecer tentando indefinidamente. O pedido aceita `budget.maxAttemptsPerGame` e `budget.maxTotalMs`. Quando o envelope matemático já prova que a restrição é impossível, a API responde `422` antes de sortear. Quando o orçamento termina depois de gerar pelo menos um jogo, responde `206` com `partial` e `acceptanceRate`.
+
+Os exemplos são abreviados: um jogo real sempre contém de 15 a 20 dezenas distintas. Se nenhum jogo for produzido, a resposta é `422` com `FILTERS_TOO_RESTRICTIVE` e as contagens de rejeição.
+
+### Expansão NDJSON
+
+Para desdobrar 16–20 dezenas, prefira:
+
+```bash
+curl -N -X POST http://localhost:3000/api/v1/games/expand \
+  -H 'Content-Type: application/json' \
+  -d '{"numbers":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16],"format":"ndjson"}'
+```
+
+A primeira linha contém metadados. As demais contêm um objeto `{ "game": [...] }`. O formato JSON permanece disponível para respostas de até 1.000 combinações; acima desse limite a API exige NDJSON com `406` para evitar acumular uma resposta grande em memória. A escrita é feita em fatias de até 2.000 combinações, com `setImmediate` entre fatias.
+
+### Conferência de jogos
+
+`POST /api/v1/games/check` valida que `drawnNumbers` tenha exatamente 15 dezenas distintas e informa a faixa de cada jogo. As faixas 11, 12 e 13 possuem valores fixos da tabela versionada; 14 e 15 são marcadas como `pari-mutuel`, pois dependem do rateio do concurso. Dezenas duplicadas no sorteio oficial são rejeitadas com `422`.
+
+### Limites e responsabilidade
+
+Os filtros de soma, paridade, primos, Fibonacci, moldura, repetição e popularidade são ferramentas de composição e organização. Popularidade é uma heurística comportamental, não uma propriedade do sorteio. O histórico não prevê o próximo resultado; backtesting pode descrever o passado, mas não demonstra capacidade preditiva. A probabilidade de uma aposta simples de 15 dezenas permanece **1 em 3.268.760**. Aposte somente valores que possa perder e consulte os recursos de jogo responsável apresentados pela aplicação.
+
+### Validação executada nesta versão
+
+A suíte automatizada cobre geração, invariantes do domínio, envelope inviável, `requestId`, resposta parcial, validação RFC 9457 e rejeição de sorteio duplicado. A validação final foi executada com:
+
+```text
+npm test -- --run       → 18 testes aprovados
+npm run typecheck       → aprovado
+npm run build           → API + frontend aprovados
+```
+
+O build do frontend também foi revisado para usar `align-items:flex-end`, evitando o aviso de compatibilidade do Autoprefixer sobre `align-items:end`.

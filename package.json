@@ -1,0 +1,13 @@
+{
+  "name": "lotzy",
+  "version": "3.0.0",
+  "private": true,
+  "description": "Monorepo da API e do frontend Lotzy",
+  "scripts": {
+    "dev": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build": "npm --prefix backend run build",
+    "test": "npm --prefix backend test",
+    "typecheck": "npm --prefix backend run typecheck"
+  }
+}
