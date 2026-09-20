@@ -2,7 +2,8 @@ import { Router } from "express";
 import { z } from "zod";
 import { loadResults } from "../../data/results.js";
 import { CryptoRandomSource } from "../../random/CryptoRandomSource.js";
-import { UNIVERSE } from "../../../domain/games/constants.js";
+import { COLUMNS, ROWS, UNIVERSE } from "../../../domain/games/constants.js";
+import { GameAnalyzer } from "../../../domain/games/services/GameAnalyzer.js";
 
 export const statsRoutes = Router();
 const source = new CryptoRandomSource();
@@ -18,9 +19,84 @@ function draw(size: number, pool: number[]): number[] {
 const disclaimer =
   "Estatísticas descrevem o histórico e não aumentam a probabilidade de qualquer combinação.";
 let delaysCache: { expires: number; value: unknown } | undefined;
+let compositionCache: { expires: number; value: unknown } | undefined;
 function ordered() {
   return loadResults().sort((a, b) => a.concurso - b.concurso);
 }
+
+function increment(distribution: Record<string, number>, value: string | number) {
+  const key = String(value);
+  distribution[key] = (distribution[key] ?? 0) + 1;
+}
+
+function gridPattern(numbers: number[], grid: number[][]): string {
+  return grid.map((line) => line.filter((number) => numbers.includes(number)).length).join("-");
+}
+
+function compositionStats() {
+  const results = ordered();
+  const analyzer = new GameAnalyzer();
+  const distributions = {
+    primos: {} as Record<string, number>,
+    moldura: {} as Record<string, number>,
+    miolo: {} as Record<string, number>,
+    pares: {} as Record<string, number>,
+    impares: {} as Record<string, number>,
+    linhas: {} as Record<string, number>,
+    colunas: {} as Record<string, number>,
+    sequencias: { longas: 0, curtas: 0 },
+  };
+  const totals = { primos: 0, moldura: 0, miolo: 0, pares: 0, impares: 0, maiorSequencia: 0 };
+
+  results.forEach((result) => {
+    const metrics = analyzer.analyze(result.dezenas);
+    totals.primos += metrics.primes;
+    totals.moldura += metrics.frame;
+    totals.miolo += metrics.core;
+    totals.pares += metrics.evens;
+    totals.impares += metrics.odds;
+    totals.maiorSequencia += metrics.maxConsecutiveRun;
+    increment(distributions.primos, metrics.primes);
+    increment(distributions.moldura, metrics.frame);
+    increment(distributions.miolo, metrics.core);
+    increment(distributions.pares, metrics.evens);
+    increment(distributions.impares, metrics.odds);
+    increment(distributions.linhas, gridPattern(result.dezenas, ROWS));
+    increment(distributions.colunas, gridPattern(result.dezenas, COLUMNS));
+    if (metrics.maxConsecutiveRun >= 3) distributions.sequencias.longas += 1;
+    else distributions.sequencias.curtas += 1;
+  });
+
+  const total = results.length;
+  const average = (value: number) => Number((value / Math.max(1, total)).toFixed(2));
+  return {
+    totalConcursos: total,
+    medias: {
+      primos: average(totals.primos),
+      pares: average(totals.pares),
+      impares: average(totals.impares),
+      moldura: average(totals.moldura),
+      miolo: average(totals.miolo),
+      maiorSequencia: average(totals.maiorSequencia),
+    },
+    distribuicoes: distributions,
+  };
+}
+
+statsRoutes.get("/composicao", (_req, res, next) => {
+  try {
+    if (!compositionCache || compositionCache.expires < Date.now()) {
+      compositionCache = {
+        expires: Date.now() + 3600000,
+        value: { status: "success", data: compositionStats(), disclaimer },
+      };
+    }
+    res.set("Cache-Control", "public, max-age=3600").json(compositionCache.value);
+  } catch (error) {
+    next(error);
+  }
+});
+
 function delayStats() {
   const results = ordered();
   const latest = results.at(-1)?.concurso ?? 0;

@@ -47,6 +47,25 @@ describe("GET /api/concursos/latest", () => {
   });
 });
 
+describe("GET /api/v1/stats/composicao", () => {
+  it("retorna médias e distribuições de composição do histórico", async () => {
+    const res = await request(app).get("/api/v1/stats/composicao");
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("success");
+    expect(res.body.data.totalConcursos).toBeGreaterThan(0);
+    expect(res.body.data.medias).toMatchObject({
+      primos: expect.any(Number),
+      pares: expect.any(Number),
+      impares: expect.any(Number),
+    });
+    expect(res.body.data.distribuicoes.sequencias).toEqual({
+      longas: expect.any(Number),
+      curtas: expect.any(Number),
+    });
+    expect(res.body.disclaimer).toBeTruthy();
+  });
+});
+
 describe("POST /api/jogos/desdobrar", () => {
   it("desdobra 16 dezenas em 16 combinações de 15 dezenas via worker", async () => {
     const dezenas = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];

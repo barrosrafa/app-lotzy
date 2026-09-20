@@ -42,6 +42,24 @@ export type FilteredRequest = { quantity: number; numbersPerGame: number; fixedN
 export type StatsDelay = { dezena: number; frequenciaTotal: number; atrasoAtual: number; atrasoMedio: number; maiorAtraso: number; ultimoConcurso: number | null };
 export type StatsTemperature = { janela: number; concursos: number; data: Array<{ dezena: number; frequencia: number; percentual: number }>; disclaimer: string };
 export type CycleResponse = { cicloAtual: number; dezenasFaltantes: number[]; concursosNoCiclo: number; historicoCiclos: Array<{ concurso: number; dezenas: number[] }>; disclaimer: string };
+export type CompositionResponse = {
+  status: string;
+  data: {
+    totalConcursos: number;
+    medias: { primos: number; pares: number; impares: number; moldura: number; miolo: number; maiorSequencia: number };
+    distribuicoes: {
+      primos: Record<string, number>;
+      moldura: Record<string, number>;
+      miolo: Record<string, number>;
+      pares: Record<string, number>;
+      impares: Record<string, number>;
+      linhas: Record<string, number>;
+      colunas: Record<string, number>;
+      sequencias: { longas: number; curtas: number };
+    };
+  };
+  disclaimer: string;
+};
 export type AnalysisResponse = { data: Array<{ game: Game; metrics: { sum: number; [key: string]: unknown } }>; aggregate: { meanSum: number; stdDevSum: number; meanPopularity: number }; diversity: Record<string, unknown>; pagination: { page: number; pageSize: number; totalGames: number } };
 
 export type LatestConcursoResponse = {
@@ -225,6 +243,10 @@ export async function getTemperature(windowSize: 10 | 20 | 50): Promise<StatsTem
 
 export async function getCycles(): Promise<CycleResponse> {
   return request('/stats/ciclos');
+}
+
+export async function getCompositionStats(): Promise<CompositionResponse> {
+  return request('/stats/composicao');
 }
 
 export async function generateCycle(quantity: number, numbersPerGame: number): Promise<{ data: Array<{ game: Game }>; ciclo: CycleResponse; disclaimer: string }> {

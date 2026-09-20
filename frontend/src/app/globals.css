@@ -62,3 +62,27 @@
 .skeleton-card { height:90px; border-radius:14px; }
 
 .filter-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; margin:24px 0; } .filter-grid label { min-width:0; } .filter-grid input { width:100%; } .filter-grid small { color:var(--graphite-2); font-size:11px; font-weight:400; } .catalog-row { display:flex; justify-content:space-between; gap:20px; align-items:flex-start; padding:15px 0; border-top:1px solid var(--line); } .catalog-row strong { display:inline-block; margin-right:8px; } .catalog-row p { margin:0; text-align:right; font-size:12px; max-width:52ch; } .tag { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:4px 8px; color:var(--caution); font-size:10px; text-transform:uppercase; letter-spacing:.08em; } .code-result { white-space:pre-wrap; overflow:auto; margin-top:18px; font-size:12px; } @media (max-width:800px) { .filter-grid { grid-template-columns:1fr; } .catalog-row { display:block; } .catalog-row p { text-align:left; margin-top:8px; } }
+.success { color:var(--seal); background:color-mix(in srgb,var(--seal) 9%,transparent); border-left:3px solid var(--seal); padding:12px 15px; margin:18px 0; font-size:13px; }
+.statistics-section { margin-top:20px; }
+.statistics-section > p { margin-top:0; }
+.distribution-block { min-width:0; }
+.distribution-block h3 { margin-bottom:12px; }
+.distribution-list { display:grid; gap:8px; max-height:380px; overflow:auto; }
+.distribution-row { display:grid; grid-template-columns:minmax(42px,auto) minmax(80px,1fr) auto; gap:10px; align-items:center; }
+.distribution-label { color:var(--graphite-2); font-size:12px; font-weight:700; }
+.distribution-bar { height:8px; border-radius:99px; background:var(--paper); overflow:hidden; }
+.distribution-bar span { display:block; height:100%; border-radius:inherit; background:var(--ink); }
+.print-view { display:none; }
+@media print {
+  @page { margin:12mm; }
+  body { background:#fff; color:#000; }
+  .topbar, .footer, .analyze-page > .eyebrow, .analyze-page > h1, .analyze-page > p, .analyze-screen { display:none !important; }
+  .analyze-page { max-width:none; padding:0; }
+  .analyze-page > div { margin-top:0 !important; }
+  .print-view { display:block; }
+  .print-view h1 { font-size:28px; margin:0 0 8px; }
+  .print-view > p { color:#333; margin:0 0 18px; }
+  .print-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }
+  .print-card { box-shadow:none; break-inside:avoid; background:#fff; border-color:#bbb; padding:16px; }
+  .print-card .mini-number { background:#f1f1f1; color:#111; }
+}

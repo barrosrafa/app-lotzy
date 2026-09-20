@@ -1,7 +1,9 @@
 'use client';
+
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { generateRandom, validateAndAnalyzeBatch, type GeneratedResponse, formatMoney, useLatestConcurso } from '@/lib/api';
+import { saveValidatedGamesToLocalStorage } from '@/lib/localGames';
 import { PlayslipGrid } from '@/components/PlayslipGrid';
 
 function GameRow({ game, index }: { game: number[]; index: number }) {
@@ -26,21 +28,31 @@ export default function HomePage() {
   const [numbersPerGame, setNumbersPerGame] = useState(15);
   const [result, setResult] = useState<GeneratedResponse>();
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
 
   async function submit() {
     setLoading(true);
     setError('');
+    setMessage('');
     try {
       const generated = await generateRandom(quantity, numbersPerGame);
       const validated = await validateAndAnalyzeBatch(generated);
       sessionStorage.setItem('lotzy:validated-games', JSON.stringify(validated));
       setResult(generated);
-      router.push('/analisar');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Não foi possível gerar os jogos.');
     } finally {
       setLoading(false);
+    }
+  }
+
+  function saveGames() {
+    try {
+      const savedCount = saveValidatedGamesToLocalStorage();
+      setMessage(`${savedCount} ${savedCount === 1 ? 'jogo salvo' : 'jogos salvos'} em Meus jogos.`);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Não foi possível salvar o lote.');
     }
   }
 
@@ -73,7 +85,7 @@ export default function HomePage() {
             <div className="metric">01 <small>gerar</small></div>
           )}
           <p style={{ margin: 0, fontSize: 13 }}>
-            Após gerar, o lote é validado pela API e encaminhado para a análise.
+            Após gerar, o lote é validado pela API. Escolha se deseja analisá-lo ou salvá-lo.
           </p>
         </div>
       </div>
@@ -119,7 +131,7 @@ export default function HomePage() {
           <div className="section-heading">
             <div>
               <span className="eyebrow">Prévia</span>
-              <h2>O resultado aparece após analisar</h2>
+              <h2>O resultado aparece após gerar</h2>
             </div>
             {result && <span className="status">{result.meta.generatedQuantity} jogos</span>}
           </div>
@@ -132,6 +144,15 @@ export default function HomePage() {
             </div>
           ) : result ? (
             <>
+              <div className="controls" style={{ marginTop: 0 }}>
+                <button className="btn btn-primary" type="button" onClick={() => router.push('/analisar')}>
+                  Analisar
+                </button>
+                <button className="btn btn-secondary" type="button" onClick={saveGames}>
+                  Salvar (Meus jogos)
+                </button>
+              </div>
+              {message && <div className="success" role="status">{message}</div>}
               <div className="stat-grid" style={{ marginBottom: 16 }}>
                 <div className="stat">
                   <span>Custo do lote</span>
@@ -165,4 +186,3 @@ export default function HomePage() {
     </main>
   );
 }
-
