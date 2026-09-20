@@ -38,6 +38,7 @@ export async function generateRandom(quantity: number, numbersPerGame: number): 
 export async function generateFiltered(payload: FilteredRequest): Promise<GeneratedResponse> { return request('/games/generate-filtered', { method: 'POST', body: JSON.stringify(payload) }, generatedSchema); }
 export async function getFilters(): Promise<FilterCatalog> { return request('/games/filters'); }
 export async function validateGame(game: Game): Promise<unknown> { return request('/games/validate', { method: 'POST', body: JSON.stringify({ game }) }); }
+export async function validateAndAnalyzeBatch(batch: GeneratedResponse): Promise<{ batch: GeneratedResponse; analysis: AnalysisResponse; validations: unknown[] }> { const games = batch.data.map(item => item.game); const validations = await Promise.all(games.map(validateGame)); const analysis = await analyzeGames(games); return { batch, analysis, validations }; }
 export async function analyzeGames(games: Game[]): Promise<AnalysisResponse> { return request('/games/analyze', { method: 'POST', body: JSON.stringify({ games, page: 1, pageSize: 100 }) }); }
 export async function checkGames(drawnNumbers: Game, games: Game[]): Promise<unknown> { return request('/games/check', { method: 'POST', body: JSON.stringify({ drawnNumbers, games }) }); }
 export async function bankrollCheck(monthlyBudgetCents: number, horizonMonths: number): Promise<unknown> { return request('/tools/bankroll-check', { method: 'POST', body: JSON.stringify({ monthlyBudgetCents, horizonMonths }) }); }
