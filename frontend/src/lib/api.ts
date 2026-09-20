@@ -23,6 +23,9 @@ export type Problem = { title?: string; detail?: string; type?: string; status?:
 export type FilterCatalogItem = { key: string; label: string; domain: { min: number; max: number }; expected?: number; stdDev?: number; suggested?: { min: number; max: number }; nature: string; note?: string; deprecationHint?: string };
 export type FilterCatalog = { data: FilterCatalogItem[] };
 export type FilteredRequest = { quantity: number; numbersPerGame: number; fixedNumbers: number[]; excludedNumbers: number[]; filters: Record<string, unknown> };
+export type StatsDelay = { dezena:number; frequenciaTotal:number; atrasoAtual:number; atrasoMedio:number; maiorAtraso:number; ultimoConcurso:number|null };
+export type StatsTemperature = { janela:number; concursos:number; data:Array<{dezena:number; frequencia:number; percentual:number}>; disclaimer:string };
+export type CycleResponse = { cicloAtual:number; dezenasFaltantes:number[]; concursosNoCiclo:number; historicoCiclos:Array<{concurso:number; dezenas:number[]}>; disclaimer:string };
 export type AnalysisResponse = { data: Array<{ game: Game; metrics: { sum: number; [key: string]: unknown } }>; aggregate: { meanSum: number; stdDevSum: number; meanPopularity: number }; diversity: Record<string, unknown>; pagination: { page: number; pageSize: number; totalGames: number } };
 
 async function request<T>(path: string, init?: RequestInit, schema?: z.ZodType<T>): Promise<T> {
@@ -45,5 +48,14 @@ export async function bankrollCheck(monthlyBudgetCents: number, horizonMonths: n
 export async function getHistory(query: HistoryQuery): Promise<HistoryResponse> { const params = new URLSearchParams({ page: String(query.page ?? 1), limit: String(query.limit ?? 50), order: query.order ?? 'desc' }); for (const key of ['dataInicio', 'dataFim', 'concurso'] as const) if (query[key]) params.set(key, query[key] as string); const apiOrigin = API_URL.replace(/\/api\/v1\/?$/, ''); return request(`${apiOrigin}/api/history?${params.toString()}`, undefined, historyResponseSchema); }
 
 export function parseNumbers(value: string): number[] { return [...new Set(value.split(/[\s,#*;]+/).map(Number).filter(number => Number.isInteger(number) && number >= 1 && number <= 25))].sort((a, b) => a - b); }
+export async function getSeasonal(month:number): Promise<{month:number; totalConcursos:number; data:Array<{dezena:number; frequencia:number; percentual:number}>; disclaimer:string}> { return request(`/stats/seasonal?month=${month}`); }
+export async function generateVariations(game:Game, count:number): Promise<{data:Array<{game:Game}>}> { return request('/games/generate/variations', { method:'POST', body:JSON.stringify({game,count}) }); }
+export async function getPrices(): Promise<unknown> { return request('/tabela-precos'); }
+export async function getDelays(): Promise<{data: StatsDelay[]; disclaimer:string}> { return request('/stats/atrasos'); }
+export async function getTemperature(windowSize: 10|20|50): Promise<StatsTemperature> { return request(`/stats/temperatura?janela=${windowSize}`); }
+export async function getCycles(): Promise<CycleResponse> { return request('/stats/ciclos'); }
+export async function generateCycle(quantity:number, numbersPerGame:number): Promise<{data:Array<{game:Game}>; ciclo:CycleResponse; disclaimer:string}> { return request('/games/generate/ciclo', { method:'POST', body:JSON.stringify({quantity,numbersPerGame}) }); }
+export async function checkGamesBatch(text:string, drawnNumbers:Game): Promise<unknown> { const origin=API_URL; const response=await fetch(`${origin}/games/check/lote?drawnNumbers=${encodeURIComponent(drawnNumbers.join(','))}`, { method:'POST', headers:{'Content-Type':'text/plain'}, body:text }); const raw=await response.json(); if(!response.ok) throw new Error((raw as Problem).detail ?? 'Não foi possível conferir o lote.'); return raw; }
+export function exportUrl(path:string, format:string): string { return `${API_URL}${path}${path.includes('?')?'&':'?'}format=${encodeURIComponent(format)}`; }
 export function formatMoney(cents: number): string { return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(cents / 100); }
 export { generatedSchema };

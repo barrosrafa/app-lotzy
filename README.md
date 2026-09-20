@@ -38,7 +38,7 @@ O projeto possui três partes principais:
 
 1. **Backend:** API Express que gera combinações usando uma fonte criptograficamente segura de aleatoriedade, valida entradas, calcula métricas, aplica filtros, expande combinações e oferece ferramentas informacionais.
 2. **Frontend:** aplicação Next.js com React 19 que consome a API, exibe jogos, permite validação e análise e apresenta uma interface visual baseada em um volante 5×5.
-3. **Dados históricos:** arquivo JSON versionado em `db/resultados.json`, contendo resultados históricos em formato tabular. O arquivo está disponível para uso futuro, mas **não é carregado automaticamente pela API atual**, que permanece stateless e recebe resultados históricos por requisição.
+3. **Dados históricos:** arquivo JSON versionado em `db/resultados.json`, contendo resultados históricos em formato tabular legado. O arquivo é lido em tempo real por `/api/history` e pelos endpoints estatísticos; a API continua stateless para jogos e usuários.
 
 O projeto não usa atualmente PostgreSQL, MySQL, MongoDB ou outro banco de dados servidor. Portanto, não há migração, conexão, usuário de banco ou serviço externo obrigatório para executar a versão atual.
 
@@ -72,7 +72,7 @@ A aplicação Next.js possui as seguintes rotas:
 | `/history` | Consultar o histórico paginado de resultados com filtros por data e concurso. |
 | `/validar` | Enviar um jogo para validação e visualizar métricas e avisos. |
 
-As rotas legadas `/filtros`, `/analisar`, `/conferir`, `/ferramentas` e `/carteira` redirecionam permanentemente para `/history`.
+As páginas de geração, análise, estatísticas e conferência permanecem client-side e não persistem jogos no backend.
 
 ### Histórico de resultados
 
