@@ -18,6 +18,7 @@ import { phase2Routes } from "./infrastructure/http/routes/phase2.routes.js";
 import { concursosRoutes } from "./infrastructure/http/routes/concursos.routes.js";
 import { jogosRoutes } from "./infrastructure/http/routes/jogos.routes.js";
 import { adminRoutes } from "./infrastructure/http/routes/admin.routes.js";
+import { aiRoutes } from "./infrastructure/http/routes/ai.routes.js";
 import { loadResults } from "./infrastructure/data/results.js";
 import { metricsRegistry, httpRequestsTotal, httpRequestDuration, readinessFailures } from "./infrastructure/metrics/prometheus.js";
 import { features } from "./shared/config/features.js";
@@ -107,6 +108,7 @@ export function createApp() {
   app.use("/api/v1/jogos", standard, jogosRoutes);
   app.use("/api/v1/games", standard, gameRoutes);
   app.use("/api/v1/games", heavy, advancedRoutes);
+  app.use("/api/v1/ai", heavy, aiRoutes);
   app.use("/api/v1/tools", standard, toolRoutes);
   app.use("/api/v1/admin", adminRoutes);
   app.use(errorHandler);

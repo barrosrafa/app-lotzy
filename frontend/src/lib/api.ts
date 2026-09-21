@@ -61,6 +61,12 @@ export type CompositionResponse = {
   disclaimer: string;
 };
 export type AnalysisResponse = { data: Array<{ game: Game; metrics: { sum: number; [key: string]: unknown } }>; aggregate: { meanSum: number; stdDevSum: number; meanPopularity: number }; diversity: Record<string, unknown>; pagination: { page: number; pageSize: number; totalGames: number } };
+export type AiPredictionResponse = {
+  status: string;
+  data: Array<{ game: Game; score: number }>;
+  meta: { model: string; modelVersion: string; trainingDraws: number; lastTrainingContest: number; source: string; caixaComplemented: boolean };
+  disclaimer: string;
+};
 
 export type LatestConcursoResponse = {
   status: string;
@@ -148,7 +154,10 @@ async function request<T>(path: string, init?: RequestInit, schema?: z.ZodType<T
     const problem = raw as Problem;
     throw new Error(`${problem.detail ?? problem.title ?? `A API respondeu ${response.status}`} · requestId: ${requestId ?? 'indisponível'}`);
   }
-  return schema ? schema.parse(raw) : (raw as T);
+  return schema ? schema.parse(raw) : raw as T;
+}
+export async function predictWithAi(quantity = 5, numbersPerGame = 15): Promise<AiPredictionResponse> {
+  return request('/ai/predict', { method: 'POST', body: JSON.stringify({ quantity, numbersPerGame, includeCaixa: true }) });
 }
 
 // REST endpoints

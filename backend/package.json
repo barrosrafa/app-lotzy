@@ -20,6 +20,7 @@
     "dev:api": "tsx watch src/server.ts"
   },
   "dependencies": {
+    "@tensorflow/tfjs-node": "^4.22.0",
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "express-rate-limit": "^7.5.0",
